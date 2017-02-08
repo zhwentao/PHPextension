@@ -34,6 +34,8 @@
 AC_PATTERN_t patterns[] = {
     PATTERN("city", "[S1]"),    /* Replace "simplicity" with "[S1]" */
     PATTERN("the ", ""),        /* Replace "the " with an empty string */
+    PATTERN("滴滴", ""),        /* Replace "滴滴" with an empty string */
+    PATTERN("阿里", ""),        /* Replace "阿里" with an empty string */
     PATTERN("and", NULL),       /* Do not replace "and" */
     PATTERN("experience", "[S2]"),
     PATTERN("exp", "[S3]"),
@@ -91,15 +93,15 @@ PHP_FUNCTION(replace_word)
 		}
 	}
 	ac_trie_finalize(trie);
-	chunk.astring = chunk1;
+	chunk.astring = subject;
 	chunk.length = strlen(chunk.astring);
 
     multifast_replace (trie, &chunk, MF_REPLACE_MODE_NORMAL, listener, 0);
     multifast_rep_flush (trie, 0);
 
-    //ac_trie_release (trie);
+    ac_trie_release (trie);
 	//返回替换后的字符串
-
+    RETURN_STRING(trie->repdata.buffer.astring, strlen(trie->repdata.buffer.astring));
 }
 /* }}} */
 

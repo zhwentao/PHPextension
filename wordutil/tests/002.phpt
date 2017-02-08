@@ -5,7 +5,7 @@ Check for wordutil presence
 if (!extension_loaded("wordutil")) print "skip"; ?>
 --FILE--
 <?php 
-var_dump(replace_word(""));
+var_dump(replace_word("百度阿里腾讯头条滴滴小米oppo"));
 /*
 	you can add regression tests for your extension here
 
@@ -18,3 +18,5 @@ var_dump(replace_word(""));
   writing regression tests
 */
 ?>
+--EXPECT--
+string(28) "百度腾讯头条小米oppo百度腾讯头条小米oppo"
