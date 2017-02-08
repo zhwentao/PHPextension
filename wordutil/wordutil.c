@@ -26,6 +26,25 @@
 #include "php_ini.h"
 #include "ext/standard/info.h"
 #include "php_wordutil.h"
+#include "ahocorasick/ahocorasick.h"
+
+#define PATTERN(p,r)    {{p,sizeof(p)-1},{r,sizeof(r)-1},{{0},0}}
+#define CHUNK(c)        {c,sizeof(c)-1}
+
+AC_PATTERN_t patterns[] = {
+    PATTERN("city", "[S1]"),    /* Replace "simplicity" with "[S1]" */
+    PATTERN("the ", ""),        /* Replace "the " with an empty string */
+    PATTERN("and", NULL),       /* Do not replace "and" */
+    PATTERN("experience", "[S2]"),
+    PATTERN("exp", "[S3]"),
+    PATTERN("simplicity", "[S4]"),
+    PATTERN("ease", "[S5]"),
+};
+#define PATTERN_COUNT (sizeof(patterns)/sizeof(AC_PATTERN_t))
+
+AC_ALPHABET_t *chunk1 = "北#京天1安门aaa the ease and simplicity of multifast";
+
+static void listener (AC_TEXT_t *text, void *user);
 
 /* If you declare any globals in php_wordutil.h uncomment this:
 ZEND_DECLARE_MODULE_GLOBALS(wordutil)
@@ -58,10 +77,27 @@ PHP_FUNCTION(replace_word)
 	int argc = ZEND_NUM_ARGS();
 	int subject_len;
 
+    unsigned int i;
+    AC_TRIE_t *trie;
+    AC_TEXT_t chunk;
+
 	if (zend_parse_parameters(argc TSRMLS_CC, "s", &subject, &subject_len) == FAILURE) 
 		return;
 	//查找是否包含非法词并替换
-	
+	trie = ac_trie_create();
+	for (i=0; i < PATTERN_COUNT; i++) {
+		if (ac_trie_add(trie, &patterns[i], 0) != ACERR_SUCCESS) {
+			printf("Failed to add pattern");
+		}
+	}
+	ac_trie_finalize(trie);
+	chunk.astring = chunk1;
+	chunk.length = strlen(chunk.astring);
+
+    multifast_replace (trie, &chunk, MF_REPLACE_MODE_NORMAL, listener, 0);
+    multifast_rep_flush (trie, 0);
+
+    //ac_trie_release (trie);
 	//返回替换后的字符串
 
 }
@@ -79,6 +115,20 @@ static void php_wordutil_init_globals(zend_wordutil_globals *wordutil_globals)
 */
 /* }}} */
 
+/* {{{ gen_ac_trie_from_file
+ */
+static void gen_ac_trie_from_file()
+{
+	//获取ini模式文件路径配置项
+	//读取文件内容，生成ac_trie
+}
+/* }}} */
+
+void listener (AC_TEXT_t *text, void *user)
+{
+    printf ("%.*s", (int)text->length, text->astring);
+}
+
 /* {{{ PHP_MINIT_FUNCTION
  */
 PHP_MINIT_FUNCTION(wordutil)
@@ -86,6 +136,8 @@ PHP_MINIT_FUNCTION(wordutil)
 	/* If you have INI entries, uncomment these lines 
 	REGISTER_INI_ENTRIES();
 	*/
+	// todo 加载非法词字典树
+	// 保存在全局变量
 	return SUCCESS;
 }
 /* }}} */
@@ -106,6 +158,7 @@ PHP_MSHUTDOWN_FUNCTION(wordutil)
  */
 PHP_RINIT_FUNCTION(wordutil)
 {
+	//todo 检测字典树文件是否更新，重新加载字典树
 	return SUCCESS;
 }
 /* }}} */
@@ -138,7 +191,6 @@ PHP_MINFO_FUNCTION(wordutil)
  * Every user visible function must have an entry in wordutil_functions[].
  */
 const zend_function_entry wordutil_functions[] = {
-	PHP_FE(confirm_wordutil_compiled,	NULL)		/* For testing, remove later. */
 	PHP_FE(replace_word,	NULL)
 	PHP_FE_END	/* Must be the last line in wordutil_functions[] */
 };

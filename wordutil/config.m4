@@ -59,5 +59,5 @@ if test "$PHP_WORDUTIL" != "no"; then
   dnl
   dnl PHP_SUBST(WORDUTIL_SHARED_LIBADD)
 
-  PHP_NEW_EXTENSION(wordutil, wordutil.c, $ext_shared)
+  PHP_NEW_EXTENSION(wordutil, wordutil.c ahocorasick/node.c ahocorasick/ahocorasick.c ahocorasick/mpool.c ahocorasick/replace.c, $ext_shared)
 fi
