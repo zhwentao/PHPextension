@@ -22,11 +22,12 @@
 #include "config.h"
 #endif
 
+#include <sys/stat.h>
+#include <unistd.h>
 #include "php.h"
 #include "php_ini.h"
 #include "ext/standard/info.h"
 #include "php_wordutil.h"
-#include "ahocorasick/ahocorasick.h"
 
 #define PATTERN(p,r)    {{p,sizeof(p)-1},{r,sizeof(r)-1},{{0},0}}
 #define CHUNK(c)        {c,sizeof(c)-1}
@@ -44,13 +45,15 @@ AC_PATTERN_t patterns[] = {
 };
 #define PATTERN_COUNT (sizeof(patterns)/sizeof(AC_PATTERN_t))
 
-AC_ALPHABET_t *chunk1 = "北#京天1安门aaa the ease and simplicity of multifast";
-
 static void listener (AC_TEXT_t *text, void *user);
+/*
+ * 字典树初始化
+ */
+static int init_ac_trie(char *filemane, long filesize);
 
 /* If you declare any globals in php_wordutil.h uncomment this:
-ZEND_DECLARE_MODULE_GLOBALS(wordutil)
 */
+ZEND_DECLARE_MODULE_GLOBALS(wordutil)
 
 /* True global resources - no need for thread safety here */
 static int le_wordutil;
@@ -58,11 +61,13 @@ static int le_wordutil;
 /* {{{ PHP_INI
  */
 /* Remove comments and fill if you need to have entries in php.ini
-PHP_INI_BEGIN()
-    STD_PHP_INI_ENTRY("wordutil.global_value",      "42", PHP_INI_ALL, OnUpdateLong, global_value, zend_wordutil_globals, wordutil_globals)
-    STD_PHP_INI_ENTRY("wordutil.global_string", "foobar", PHP_INI_ALL, OnUpdateString, global_string, zend_wordutil_globals, wordutil_globals)
-PHP_INI_END()
 */
+PHP_INI_BEGIN()
+	/*
+	 * 模式配置文件的绝对路径
+	 */
+    STD_PHP_INI_ENTRY("wordutil.patterns_path",      "patterns", PHP_INI_SYSTEM, OnUpdateString, patterns_path, zend_wordutil_globals, wordutil_globals)
+PHP_INI_END()
 /* }}} */
 
 /* Remove the following function when you have successfully modified config.m4
@@ -80,28 +85,18 @@ PHP_FUNCTION(replace_word)
 	int subject_len;
 
     unsigned int i;
-    AC_TRIE_t *trie;
     AC_TEXT_t chunk;
 
 	if (zend_parse_parameters(argc TSRMLS_CC, "s", &subject, &subject_len) == FAILURE) 
 		return;
-	//查找是否包含非法词并替换
-	trie = ac_trie_create();
-	for (i=0; i < PATTERN_COUNT; i++) {
-		if (ac_trie_add(trie, &patterns[i], 0) != ACERR_SUCCESS) {
-			printf("Failed to add pattern");
-		}
-	}
-	ac_trie_finalize(trie);
 	chunk.astring = subject;
 	chunk.length = strlen(chunk.astring);
 
-    multifast_replace (trie, &chunk, MF_REPLACE_MODE_NORMAL, listener, 0);
-    multifast_rep_flush (trie, 0);
+    multifast_replace (WORDUTIL_G(trie), &chunk, MF_REPLACE_MODE_NORMAL, listener, 0);
+    multifast_rep_flush (WORDUTIL_G(trie), 0);
 
-    ac_trie_release (trie);
 	//返回替换后的字符串
-    RETURN_STRING(trie->repdata.buffer.astring, strlen(trie->repdata.buffer.astring));
+    RETURN_STRING(WORDUTIL_G(trie)->repdata.buffer.astring, strlen(WORDUTIL_G(trie)->repdata.buffer.astring));
 }
 /* }}} */
 
@@ -109,24 +104,48 @@ PHP_FUNCTION(replace_word)
 /* {{{ php_wordutil_init_globals
  */
 /* Uncomment this function if you have INI entries
+*/
 static void php_wordutil_init_globals(zend_wordutil_globals *wordutil_globals)
 {
-	wordutil_globals->global_value = 0;
-	wordutil_globals->global_string = NULL;
+	wordutil_globals->patterns_path = 0;
+	wordutil_globals->trie = NULL;
 }
-*/
 /* }}} */
 
 /* {{{ gen_ac_trie_from_file
  */
-static void gen_ac_trie_from_file()
+static int init_ac_trie(char *filename, long filesize)
 {
-	//获取ini模式文件路径配置项
+	FILE *fp;
+	size_t ret_code;
+	char *buf;
+	char *token;
+	const char delim[2] = "\n";
+
+	if ((fp = VCWD_FOPEN(filename, "r")) == NULL) {
+	    return -1;
+	}
+	//读取出错
+	buf = (char *) emalloc(filesize);
+    if ((ret_code = fread(buf, 1, filesize, fp)) != filesize) {
+	    return -2;
+	}
 	//读取文件内容，生成ac_trie
+	WORDUTIL_G(trie) = ac_trie_create();
+	token = strtok(buf, delim);
+	while (token != NULL) {
+        token = strtok(NULL, delim);
+		//todo
+		if (ac_trie_add(WORDUTIL_G(trie), &patterns[i], 0) != ACERR_SUCCESS) {
+			printf("Failed to add pattern");
+		}
+    }
+	ac_trie_finalize(WORDUTIL_G(trie));
+	      
 }
 /* }}} */
 
-void listener (AC_TEXT_t *text, void *user)
+static void listener (AC_TEXT_t *text, void *user)
 {
     printf ("%.*s", (int)text->length, text->astring);
 }
@@ -135,10 +154,17 @@ void listener (AC_TEXT_t *text, void *user)
  */
 PHP_MINIT_FUNCTION(wordutil)
 {
+	struct stat buf;
 	/* If you have INI entries, uncomment these lines 
-	REGISTER_INI_ENTRIES();
 	*/
-	// todo 加载非法词字典树
+	REGISTER_INI_ENTRIES();
+	//记录加载时间
+	if (stat(WORDUTIL_G(patterns_path), &buf)) {
+	    return FAILURE;
+	}
+	WORDUTIL_G(pattern_conf_mtime) = buf.st_mtime;
+	//加载非法词字典树
+	init_ac_trie(WORDUTIL_G(patterns_path), (long)buf.st_size);
 	// 保存在全局变量
 	return SUCCESS;
 }
@@ -149,8 +175,9 @@ PHP_MINIT_FUNCTION(wordutil)
 PHP_MSHUTDOWN_FUNCTION(wordutil)
 {
 	/* uncomment this line if you have INI entries
-	UNREGISTER_INI_ENTRIES();
 	*/
+	UNREGISTER_INI_ENTRIES();
+	ac_trie_release(WORDUTIL_G(trie));
 	return SUCCESS;
 }
 /* }}} */
@@ -160,7 +187,16 @@ PHP_MSHUTDOWN_FUNCTION(wordutil)
  */
 PHP_RINIT_FUNCTION(wordutil)
 {
+	struct stat buf;
 	//todo 检测字典树文件是否更新，重新加载字典树
+	if (stat(WORDUTIL_G(patterns_path), &buf)) {
+	    return FAILURE;
+	}
+	if (buf.st_mtime > WORDUTIL_G(pattern_conf_mtime)) {
+	    printf("%d\r\n", (int)buf.st_mtime);
+	    //reload trie
+	}
+	printf("Rinit");
 	return SUCCESS;
 }
 /* }}} */
@@ -170,6 +206,7 @@ PHP_RINIT_FUNCTION(wordutil)
  */
 PHP_RSHUTDOWN_FUNCTION(wordutil)
 {
+
 	return SUCCESS;
 }
 /* }}} */
@@ -183,8 +220,8 @@ PHP_MINFO_FUNCTION(wordutil)
 	php_info_print_table_end();
 
 	/* Remove comments if you have entries in php.ini
-	DISPLAY_INI_ENTRIES();
 	*/
+	DISPLAY_INI_ENTRIES();
 }
 /* }}} */
 

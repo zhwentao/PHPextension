@@ -21,6 +21,8 @@
 #ifndef PHP_WORDUTIL_H
 #define PHP_WORDUTIL_H
 
+#include "ahocorasick/ahocorasick.h"
+
 extern zend_module_entry wordutil_module_entry;
 #define phpext_wordutil_ptr &wordutil_module_entry
 
@@ -42,11 +44,12 @@ extern zend_module_entry wordutil_module_entry;
   	Declare any global variables you may need between the BEGIN
 	and END macros here:     
 
-ZEND_BEGIN_MODULE_GLOBALS(wordutil)
-	long  global_value;
-	char *global_string;
-ZEND_END_MODULE_GLOBALS(wordutil)
 */
+ZEND_BEGIN_MODULE_GLOBALS(wordutil)
+	char *patterns_path;
+    AC_TRIE_t *trie;
+	time_t pattern_conf_mtime;
+ZEND_END_MODULE_GLOBALS(wordutil)
 
 /* In every utility function you add that needs to use variables 
    in php_wordutil_globals, call TSRMLS_FETCH(); after declaring other 
@@ -63,6 +66,11 @@ ZEND_END_MODULE_GLOBALS(wordutil)
 #else
 #define WORDUTIL_G(v) (wordutil_globals.v)
 #endif
+
+/*
+ * 读取文件缓存区大小 4KB
+ */
+#define READ_FILE_SIZE 4096
 
 #endif	/* PHP_WORDUTIL_H */
 

@@ -1,0 +1,7 @@
+
+---- EXPECTED OUTPUT
+wordutil extension is available
+---- ACTUAL OUTPUT
+minit
+wordutil extension is availableRinit
+---- FAILED
