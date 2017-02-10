@@ -24,6 +24,8 @@
 
 #include <sys/stat.h>
 #include <unistd.h>
+#include <wchar.h>
+
 #include "php.h"
 #include "php_ini.h"
 #include "ext/standard/info.h"
@@ -46,6 +48,8 @@ AC_PATTERN_t patterns[] = {
 #define PATTERN_COUNT (sizeof(patterns)/sizeof(AC_PATTERN_t))
 
 static void listener (AC_TEXT_t *text, void *user);
+static void init_trie_by_var();
+static int add_trie_by_file(char* filename, long filesize);
 /*
  * 字典树初始化
  */
@@ -109,45 +113,93 @@ static void php_wordutil_init_globals(zend_wordutil_globals *wordutil_globals)
 {
 	wordutil_globals->patterns_path = 0;
 	wordutil_globals->trie = NULL;
+	wordutil_globals->pattern_conf_mtime = 0;
 }
 /* }}} */
 
-/* {{{ gen_ac_trie_from_file
+/* {{{ init_ac_trie 
  */
 static int init_ac_trie(char *filename, long filesize)
 {
-	FILE *fp;
-	size_t ret_code;
-	char *buf;
-	char *token;
-	const char delim[2] = "\n";
-
-	if ((fp = VCWD_FOPEN(filename, "r")) == NULL) {
-	    return -1;
-	}
-	//读取出错
-	buf = (char *) emalloc(filesize);
-    if ((ret_code = fread(buf, 1, filesize, fp)) != filesize) {
-	    return -2;
-	}
-	//读取文件内容，生成ac_trie
 	WORDUTIL_G(trie) = ac_trie_create();
-	token = strtok(buf, delim);
-	while (token != NULL) {
-        token = strtok(NULL, delim);
-		//todo
-		if (ac_trie_add(WORDUTIL_G(trie), &patterns[i], 0) != ACERR_SUCCESS) {
-			printf("Failed to add pattern");
-		}
-    }
+	//add trie nodes
+    init_trie_by_var();
+	//add_trie_by_file(filename, filesize);
 	ac_trie_finalize(WORDUTIL_G(trie));
 	      
 }
 /* }}} */
 
+static void init_trie_by_var() {
+	int i;
+    AC_PATTERN_t patterns[] = {
+        PATTERN("百度", "**"),        /* Replace "the " with an empty string */
+        PATTERN("滴滴", ""),        /* Replace "滴滴" with an empty string */
+        PATTERN("阿里", ""),        /* Replace "阿里" with an empty string */
+	};
+	const char * texts = "baidu";
+	const char * textr = "*";
+    for (i = 0; i < PATTERN_COUNT; i++)
+    {
+        AC_PATTERN_t pattern =  PATTERN(texts, textr);        /* Replace "the " with an empty string */
+		printf("p: %d r: %d\r\n", pattern.ptext.length, pattern.rtext.length);
+        //AC_PATTERN_t pattern =  PATTERN("baidu", "const");        /* Replace "the " with an empty string */
+        if (ac_trie_add (WORDUTIL_G(trie), &pattern, 0) != ACERR_SUCCESS)
+            printf("Failed to add pattern \"%.*s\"\n", 
+                    (int)pattern.ptext.length, pattern.ptext.astring);
+    }
+}
+
+static int add_trie_by_file(char *filename, long filesize) {
+	FILE *fp;
+	size_t ret_code;
+	char *buf;
+	char *token;
+	const char delim[2] = TOKEN_DELIM;
+	char *saveptr1, *saveptr2;
+	char *pattern;
+	char *replace;
+	if ((fp = VCWD_FOPEN(filename, "r")) == NULL) {
+	    return -1;
+	}
+	//读取出错
+	buf = (char *) emalloc(filesize + 1);
+	memset(buf, '0', filesize + 1);
+    if ((ret_code = fread(buf, 1, filesize, fp)) != filesize) {
+		efree(buf);
+	    return -2;
+	}
+	token = strtok_r(buf, TOKEN_DELIM, &saveptr1);
+	while (token != NULL && strstr(token, "=>")) {
+		printf("token: %s\r\n", token);
+		//todo
+		pattern = strtok_r(token, PATTERN_REPLACE_NEEDLE, &saveptr2);
+		replace = strtok_r(NULL, PATTERN_REPLACE_NEEDLE, &saveptr2);
+		if (pattern == NULL) {
+		    continue;
+		}
+		if (replace == NULL) {
+			//int len = strlen(pattern) / sizeof(wchar_t);
+			int len = strlen(pattern);
+		    replace = emalloc(len + 1);
+			memset(replace, '*', len);
+			replace[len] = '\0';
+		}
+		printf("token: %s, pattern: %s, replace: %s\r\n", token, pattern, replace);
+        AC_PATTERN_t ac_pattern = PATTERN((const char*)pattern, (const char *)replace);
+		if (ac_trie_add(WORDUTIL_G(trie), &ac_pattern, 0) != ACERR_SUCCESS) {
+			printf("Failed to add pattern");
+		}
+
+        token = strtok_r(NULL, TOKEN_DELIM, &saveptr1);
+    }
+    efree(buf);
+    fclose(fp);
+}
+
 static void listener (AC_TEXT_t *text, void *user)
 {
-    printf ("%.*s", (int)text->length, text->astring);
+    //printf ("%.*s", (int)text->length, text->astring);
 }
 
 /* {{{ PHP_MINIT_FUNCTION
@@ -193,10 +245,9 @@ PHP_RINIT_FUNCTION(wordutil)
 	    return FAILURE;
 	}
 	if (buf.st_mtime > WORDUTIL_G(pattern_conf_mtime)) {
-	    printf("%d\r\n", (int)buf.st_mtime);
+	//    printf("%d\r\n", (int)buf.st_mtime);
 	    //reload trie
 	}
-	printf("Rinit");
 	return SUCCESS;
 }
 /* }}} */

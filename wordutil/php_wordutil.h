@@ -71,7 +71,8 @@ ZEND_END_MODULE_GLOBALS(wordutil)
  * 读取文件缓存区大小 4KB
  */
 #define READ_FILE_SIZE 4096
-
+#define TOKEN_DELIM "\r\n"
+#define PATTERN_REPLACE_NEEDLE "=>"
 #endif	/* PHP_WORDUTIL_H */
 
 

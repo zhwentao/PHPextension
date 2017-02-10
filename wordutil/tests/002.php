@@ -1,5 +1,5 @@
 <?php 
-var_dump(replace_word("百度阿里腾讯头条滴滴小米oppo"));
+var_dump(replace_word("baidu百度阿里腾讯头条滴滴小米oppo"));
 /*
 	you can add regression tests for your extension here
 
