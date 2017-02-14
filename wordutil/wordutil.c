@@ -210,20 +210,6 @@ static int add_trie_by_file(char *dictname, char *fullpath) {
 		}
 
 		add_trie_node(pattern, replace);
-		/*
-		ac_pattern_p = (AC_PATTERN_t *)pemalloc(sizeof(AC_PATTERN_t), 1);
-		memset(ac_pattern_p, 0, sizeof(AC_PATTERN_t));
-		ac_pattern_p->ptext.astring = pattern;
-		ac_pattern_p->ptext.length = strlen(pattern);
-		ac_pattern_p->rtext.astring = replace;
-		ac_pattern_p->rtext.length = strlen(replace);
-
-		printf("[FILE]-p: [%d]-%s r: [%d]-%s\r\n", ac_pattern_p->ptext.length, ac_pattern_p->ptext.astring, ac_pattern_p->rtext.length, ac_pattern_p->rtext.astring);
-		if (ac_trie_add(WORDUTIL_G(trie), ac_pattern_p, 0) != ACERR_SUCCESS) {
-			printf("Failed to add pattern");
-		}
-
-		*/
         token = strtok_r(NULL, TOKEN_DELIM, &saveptr1);
     }
     efree(buf);
