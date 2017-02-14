@@ -19,4 +19,4 @@ var_dump(replace_word("百度阿里腾讯头条滴滴小米oppo"));
 */
 ?>
 --EXPECT--
-string(28) "百度腾讯头条小米oppo百度腾讯头条小米oppo"
+string(37) "百度***腾讯头条******小米oppo"
