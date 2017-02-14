@@ -52,6 +52,7 @@ AC_PATTERN_t patterns[] = {
 static void listener (AC_TEXT_t *text, void *user);
 static void init_trie_by_var();
 static int add_trie_by_file(char *dictname, char* fullpath);
+static inline void add_trie_node(char *pattern, char *replace);
 //static void build_trie_by_file(char *dictname, char *fullpath);
 /*
  * 字典树初始化
@@ -166,7 +167,6 @@ static int add_trie_by_file(char *dictname, char *fullpath) {
 	char *buf;
 	php_stream *stream;
 	char *token;
-	const char delim[2] = TOKEN_DELIM;
 	char *saveptr1, *saveptr2;
 	char *pattern;
 	char *replace;
@@ -181,10 +181,10 @@ static int add_trie_by_file(char *dictname, char *fullpath) {
 	    return -1;
 	}
 	//读取出错
-	buf = (char *) pemalloc(st.st_size + 1, 1);
+	buf = (char *) emalloc(st.st_size + 1);
 	memset(buf, '\0', st.st_size + 1);
     if ((ret_code = fread(buf, 1, st.st_size, fp)) != st.st_size) {
-		pefree(buf, 1);
+		efree(buf);
 		printf("read error\r\n");
 	    return -2;
 	}
@@ -197,7 +197,7 @@ static int add_trie_by_file(char *dictname, char *fullpath) {
 		    continue;
 		}
 		if (tmp_r == NULL) {
-			int len = strlen(pattern);
+			int len = strlen(tmp_p);
 		    replace = pemalloc(len + 1, 1);
 			memset(replace, '*', len);
 			replace[len] = '\0';
@@ -209,6 +209,8 @@ static int add_trie_by_file(char *dictname, char *fullpath) {
 		    replace = strcpy(replace, tmp_r);
 		}
 
+		add_trie_node(pattern, replace);
+		/*
 		ac_pattern_p = (AC_PATTERN_t *)pemalloc(sizeof(AC_PATTERN_t), 1);
 		memset(ac_pattern_p, 0, sizeof(AC_PATTERN_t));
 		ac_pattern_p->ptext.astring = pattern;
@@ -221,13 +223,27 @@ static int add_trie_by_file(char *dictname, char *fullpath) {
 			printf("Failed to add pattern");
 		}
 
+		*/
         token = strtok_r(NULL, TOKEN_DELIM, &saveptr1);
     }
-    pefree(buf, 1);
+    efree(buf);
     fclose(fp);
 	fp = NULL;
 }
 
+static inline void add_trie_node(char *pattern, char *replace) {
+	AC_PATTERN_t ac_pattern;
+	ac_pattern.ptext.astring = pattern;
+	ac_pattern.ptext.length = strlen(pattern);
+	ac_pattern.rtext.astring = replace;
+	ac_pattern.rtext.length = strlen(replace);
+	ac_pattern.id.u.number = 0;
+	ac_pattern.id.type = 0;
+
+	if (ac_trie_add(WORDUTIL_G(trie), &ac_pattern, 0) != ACERR_SUCCESS) {
+		printf("Failed to add pattern");
+	}
+}
 
 static void listener (AC_TEXT_t *text, void *user)
 {
@@ -262,6 +278,7 @@ PHP_MSHUTDOWN_FUNCTION(wordutil)
 	*/
 	UNREGISTER_INI_ENTRIES();
 	ac_trie_release(WORDUTIL_G(trie));
+	WORDUTIL_G(trie) = NULL;
 	return SUCCESS;
 }
 /* }}} */
@@ -278,6 +295,8 @@ PHP_RINIT_FUNCTION(wordutil)
 	}
 	if (st.st_mtime > WORDUTIL_G(pattern_conf_mtime) || WORDUTIL_G(trie) == NULL) {
 	    //reload trie
+	    ac_trie_release(WORDUTIL_G(trie));
+	    WORDUTIL_G(trie) = NULL;
 	    init_ac_trie(WORDUTIL_G(patterns_path), (long)st.st_size);
 	}
 	return SUCCESS;
