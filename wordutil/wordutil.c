@@ -32,6 +32,7 @@
 #include "php_wordutil.h"
 
 #define PATTERN(p,r)    {{p,sizeof(p)-1},{r,sizeof(r)-1},{{0},0}}
+#define PATTERN_STR(p,r)    {{p,strlen(p)},{r,strlen(r)},{{0},0}}
 #define CHUNK(c)        {c,sizeof(c)-1}
 
 AC_PATTERN_t patterns[] = {
@@ -39,7 +40,7 @@ AC_PATTERN_t patterns[] = {
     PATTERN("the ", ""),        /* Replace "the " with an empty string */
     PATTERN("滴滴", ""),        /* Replace "滴滴" with an empty string */
     PATTERN("阿里", ""),        /* Replace "阿里" with an empty string */
-    PATTERN("and", NULL),       /* Do not replace "and" */
+    PATTERN("oppo", "步步高"),       /* Do not replace "and" */
     PATTERN("experience", "[S2]"),
     PATTERN("exp", "[S3]"),
     PATTERN("simplicity", "[S4]"),
@@ -132,21 +133,16 @@ static int init_ac_trie(char *filename, long filesize)
 
 static void init_trie_by_var() {
 	int i;
-    AC_PATTERN_t patterns[] = {
-        PATTERN("百度", "**"),        /* Replace "the " with an empty string */
-        PATTERN("滴滴", ""),        /* Replace "滴滴" with an empty string */
-        PATTERN("阿里", ""),        /* Replace "阿里" with an empty string */
-	};
 	const char * texts = "baidu";
 	const char * textr = "*";
     for (i = 0; i < PATTERN_COUNT; i++)
     {
-        AC_PATTERN_t pattern =  PATTERN(texts, textr);        /* Replace "the " with an empty string */
-		printf("p: %d r: %d\r\n", pattern.ptext.length, pattern.rtext.length);
+        //AC_PATTERN_t pattern =  PATTERN_STR(texts, textr);        /* Replace "the " with an empty string */
+		printf("p: %d r: %d\r\n", patterns[i].ptext.length, patterns[i].rtext.length);
         //AC_PATTERN_t pattern =  PATTERN("baidu", "const");        /* Replace "the " with an empty string */
-        if (ac_trie_add (WORDUTIL_G(trie), &pattern, 0) != ACERR_SUCCESS)
+        if (ac_trie_add (WORDUTIL_G(trie), &patterns[i], 0) != ACERR_SUCCESS)
             printf("Failed to add pattern \"%.*s\"\n", 
-                    (int)pattern.ptext.length, pattern.ptext.astring);
+                    (int)patterns[i].ptext.length, patterns[i].ptext.astring);
     }
 }
 
@@ -186,7 +182,7 @@ static int add_trie_by_file(char *filename, long filesize) {
 			replace[len] = '\0';
 		}
 		printf("token: %s, pattern: %s, replace: %s\r\n", token, pattern, replace);
-        AC_PATTERN_t ac_pattern = PATTERN((const char*)pattern, (const char *)replace);
+        AC_PATTERN_t ac_pattern = PATTERN_STR((const char*)pattern, (const char *)replace);
 		if (ac_trie_add(WORDUTIL_G(trie), &ac_pattern, 0) != ACERR_SUCCESS) {
 			printf("Failed to add pattern");
 		}

@@ -2,6 +2,7 @@
 ---- EXPECTED OUTPUT
 string(28) "百度腾讯头条小米oppo百度腾讯头条小米oppo"
 ---- ACTUAL OUTPUT
-minit
-string(28) "Rinit百度腾讯头条小米oppo百度腾讯头条小米oppo"
+PHP Fatal error:  Unable to start wordutil module in Unknown on line 0
+
+Fatal error: Unable to start wordutil module in Unknown on line 0
 ---- FAILED

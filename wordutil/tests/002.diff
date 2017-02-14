@@ -1,3 +1,4 @@
-001+ minit
+001+ PHP Fatal error:  Unable to start wordutil module in Unknown on line 0
 001- string(28) "百度腾讯头条小米oppo百度腾讯头条小米oppo"
-002+ string(28) "Rinit百度腾讯头条小米oppo百度腾讯头条小米oppo"
+002+ 
+003+ Fatal error: Unable to start wordutil module in Unknown on line 0
