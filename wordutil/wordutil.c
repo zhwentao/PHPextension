@@ -24,15 +24,17 @@
 
 #include <sys/stat.h>
 #include <unistd.h>
-#include <wchar.h>
 
 #include "php.h"
 #include "php_ini.h"
 #include "ext/standard/info.h"
 #include "php_wordutil.h"
 
-#define PATTERN(p,r)    {{p,sizeof(p)-1},{r,sizeof(r)-1},{{0},0}}
+#define PATTERN_STR(p,r)    {{p,strlen(p)},{r,strlen(r)},{{0},0}}
+#define PATTERN(p,r)    {{p,sizeof(p) - 1},{r,sizeof(r) - 1},{{0},0}}
 #define CHUNK(c)        {c,sizeof(c)-1}
+
+#define DELIMITER '|'
 
 AC_PATTERN_t patterns[] = {
     PATTERN("city", "[S1]"),    /* Replace "simplicity" with "[S1]" */
@@ -49,7 +51,8 @@ AC_PATTERN_t patterns[] = {
 
 static void listener (AC_TEXT_t *text, void *user);
 static void init_trie_by_var();
-static int add_trie_by_file(char* filename, long filesize);
+static int add_trie_by_file(char *dictname, char* fullpath);
+//static void build_trie_by_file(char *dictname, char *fullpath);
 /*
  * 字典树初始化
  */
@@ -96,6 +99,9 @@ PHP_FUNCTION(replace_word)
 	chunk.astring = subject;
 	chunk.length = strlen(chunk.astring);
 
+	if (WORDUTIL_G(trie) == NULL) {
+	    RETURN_FALSE;
+	}
     multifast_replace (WORDUTIL_G(trie), &chunk, MF_REPLACE_MODE_NORMAL, listener, 0);
     multifast_rep_flush (WORDUTIL_G(trie), 0);
 
@@ -112,7 +118,7 @@ PHP_FUNCTION(replace_word)
 static void php_wordutil_init_globals(zend_wordutil_globals *wordutil_globals)
 {
 	wordutil_globals->patterns_path = 0;
-	wordutil_globals->trie = NULL;
+//	wordutil_globals->trie = NULL;
 	wordutil_globals->pattern_conf_mtime = 0;
 }
 /* }}} */
@@ -121,10 +127,14 @@ static void php_wordutil_init_globals(zend_wordutil_globals *wordutil_globals)
  */
 static int init_ac_trie(char *filename, long filesize)
 {
+	if (WORDUTIL_G(trie) != NULL) {
+	    ac_trie_release(WORDUTIL_G(trie));
+	}
 	WORDUTIL_G(trie) = ac_trie_create();
 	//add trie nodes
-    init_trie_by_var();
-	//add_trie_by_file(filename, filesize);
+    //init_trie_by_var();
+	add_trie_by_file("test", filename);
+	//build_trie_by_file("test", filename);
 	ac_trie_finalize(WORDUTIL_G(trie));
 	      
 }
@@ -133,90 +143,112 @@ static int init_ac_trie(char *filename, long filesize)
 static void init_trie_by_var() {
 	int i;
     AC_PATTERN_t patterns[] = {
-        PATTERN("百度", "**"),        /* Replace "the " with an empty string */
-        PATTERN("滴滴", ""),        /* Replace "滴滴" with an empty string */
-        PATTERN("阿里", ""),        /* Replace "阿里" with an empty string */
+        PATTERN_STR("百度", "**"),        /* Replace "the " with an empty string */
+        PATTERN_STR("滴滴", "******"),        /* Replace "滴滴" with an empty string */
+        PATTERN_STR("阿里", ""),        /* Replace "阿里" with an empty string */
+        PATTERN_STR("baidu", "dd"),        /* Replace "阿里" with an empty string */
 	};
-	const char * texts = "baidu";
-	const char * textr = "*";
+
     for (i = 0; i < PATTERN_COUNT; i++)
     {
-        AC_PATTERN_t pattern =  PATTERN(texts, textr);        /* Replace "the " with an empty string */
-		printf("p: %d r: %d\r\n", pattern.ptext.length, pattern.rtext.length);
-        //AC_PATTERN_t pattern =  PATTERN("baidu", "const");        /* Replace "the " with an empty string */
-        if (ac_trie_add (WORDUTIL_G(trie), &pattern, 0) != ACERR_SUCCESS)
+        //AC_PATTERN_t pattern =  PATTERN_STR(texts, textr);        /* Replace "the " with an empty string */
+		printf("p: [%d]-%s r: [%d]-%s\r\n", patterns[i].ptext.length, patterns[i].ptext.astring, patterns[i].rtext.length, patterns[i].rtext.astring);
+        //AC_PATTERN_t pattern =  PATTERN_STR("baidu", "const");        /* Replace "the " with an empty string */
+        if (ac_trie_add (WORDUTIL_G(trie), &patterns[i], 0) != ACERR_SUCCESS)
             printf("Failed to add pattern \"%.*s\"\n", 
-                    (int)pattern.ptext.length, pattern.ptext.astring);
+                    (int)patterns[i].ptext.length, patterns[i].ptext.astring);
     }
 }
 
-static int add_trie_by_file(char *filename, long filesize) {
+static int add_trie_by_file(char *dictname, char *fullpath) {
 	FILE *fp;
 	size_t ret_code;
 	char *buf;
+	php_stream *stream;
 	char *token;
 	const char delim[2] = TOKEN_DELIM;
 	char *saveptr1, *saveptr2;
 	char *pattern;
 	char *replace;
-	if ((fp = VCWD_FOPEN(filename, "r")) == NULL) {
+	struct stat st;
+    AC_PATTERN_t *ac_pattern_p;
+	stat(fullpath, &st);
+	if (st.st_size == 0) {
+	    return -1;
+	}
+	if ((fp = VCWD_FOPEN(fullpath, "r")) == NULL) {
+		printf("open error\r\n");
 	    return -1;
 	}
 	//读取出错
-	buf = (char *) emalloc(filesize + 1);
-	memset(buf, '0', filesize + 1);
-    if ((ret_code = fread(buf, 1, filesize, fp)) != filesize) {
-		efree(buf);
+	buf = (char *) pemalloc(st.st_size + 1, 1);
+	memset(buf, '\0', st.st_size + 1);
+    if ((ret_code = fread(buf, 1, st.st_size, fp)) != st.st_size) {
+		pefree(buf, 1);
+		printf("read error\r\n");
 	    return -2;
 	}
 	token = strtok_r(buf, TOKEN_DELIM, &saveptr1);
 	while (token != NULL && strstr(token, "=>")) {
-		printf("token: %s\r\n", token);
 		//todo
-		pattern = strtok_r(token, PATTERN_REPLACE_NEEDLE, &saveptr2);
-		replace = strtok_r(NULL, PATTERN_REPLACE_NEEDLE, &saveptr2);
-		if (pattern == NULL) {
+		char *tmp_p = strtok_r(token, PATTERN_REPLACE_NEEDLE, &saveptr2);
+		char *tmp_r = strtok_r(NULL, PATTERN_REPLACE_NEEDLE, &saveptr2);
+		if (tmp_p == NULL) {
 		    continue;
 		}
-		if (replace == NULL) {
-			//int len = strlen(pattern) / sizeof(wchar_t);
+		if (tmp_r == NULL) {
 			int len = strlen(pattern);
-		    replace = emalloc(len + 1);
+		    replace = pemalloc(len + 1, 1);
 			memset(replace, '*', len);
 			replace[len] = '\0';
 		}
-		printf("token: %s, pattern: %s, replace: %s\r\n", token, pattern, replace);
-        AC_PATTERN_t ac_pattern = PATTERN((const char*)pattern, (const char *)replace);
-		if (ac_trie_add(WORDUTIL_G(trie), &ac_pattern, 0) != ACERR_SUCCESS) {
+		pattern = (char *)pemalloc(strlen(tmp_p) + 1, 1);
+		pattern = strcpy(pattern, tmp_p);
+		if (tmp_r) {
+		    replace = (char *)pemalloc(strlen(tmp_r) + 1, 1);
+		    replace = strcpy(replace, tmp_r);
+		}
+
+		ac_pattern_p = (AC_PATTERN_t *)pemalloc(sizeof(AC_PATTERN_t), 1);
+		memset(ac_pattern_p, 0, sizeof(AC_PATTERN_t));
+		ac_pattern_p->ptext.astring = pattern;
+		ac_pattern_p->ptext.length = strlen(pattern);
+		ac_pattern_p->rtext.astring = replace;
+		ac_pattern_p->rtext.length = strlen(replace);
+
+		printf("[FILE]-p: [%d]-%s r: [%d]-%s\r\n", ac_pattern_p->ptext.length, ac_pattern_p->ptext.astring, ac_pattern_p->rtext.length, ac_pattern_p->rtext.astring);
+		if (ac_trie_add(WORDUTIL_G(trie), ac_pattern_p, 0) != ACERR_SUCCESS) {
 			printf("Failed to add pattern");
 		}
 
         token = strtok_r(NULL, TOKEN_DELIM, &saveptr1);
     }
-    efree(buf);
+    pefree(buf, 1);
     fclose(fp);
+	fp = NULL;
 }
+
 
 static void listener (AC_TEXT_t *text, void *user)
 {
-    //printf ("%.*s", (int)text->length, text->astring);
+    printf ("listener: %.*s\r\n", (int)text->length, text->astring);
 }
 
 /* {{{ PHP_MINIT_FUNCTION
  */
 PHP_MINIT_FUNCTION(wordutil)
 {
-	struct stat buf;
+	struct stat st;
 	/* If you have INI entries, uncomment these lines 
 	*/
 	REGISTER_INI_ENTRIES();
 	//记录加载时间
-	if (stat(WORDUTIL_G(patterns_path), &buf)) {
+	if (stat(WORDUTIL_G(patterns_path), &st)) {
 	    return FAILURE;
 	}
-	WORDUTIL_G(pattern_conf_mtime) = buf.st_mtime;
+	WORDUTIL_G(pattern_conf_mtime) = st.st_mtime;
 	//加载非法词字典树
-	init_ac_trie(WORDUTIL_G(patterns_path), (long)buf.st_size);
+	init_ac_trie(WORDUTIL_G(patterns_path), (long)st.st_size);
 	// 保存在全局变量
 	return SUCCESS;
 }
@@ -239,14 +271,14 @@ PHP_MSHUTDOWN_FUNCTION(wordutil)
  */
 PHP_RINIT_FUNCTION(wordutil)
 {
-	struct stat buf;
+	struct stat st;
 	//todo 检测字典树文件是否更新，重新加载字典树
-	if (stat(WORDUTIL_G(patterns_path), &buf)) {
+	if (stat(WORDUTIL_G(patterns_path), &st)) {
 	    return FAILURE;
 	}
-	if (buf.st_mtime > WORDUTIL_G(pattern_conf_mtime)) {
-	//    printf("%d\r\n", (int)buf.st_mtime);
+	if (st.st_mtime > WORDUTIL_G(pattern_conf_mtime) || WORDUTIL_G(trie) == NULL) {
 	    //reload trie
+	    init_ac_trie(WORDUTIL_G(patterns_path), (long)st.st_size);
 	}
 	return SUCCESS;
 }

@@ -1,5 +1,8 @@
 <?php 
-var_dump(replace_word("baidu百度阿里腾讯头条滴滴小米oppo"));
+$i = 10000;
+while($i--) {
+    echo replace_word("[{$i}]oppo 百度，阿里巴巴，滴滴小米，头条baidu{$i}---"). "\r\n";
+}
 /*
 	you can add regression tests for your extension here
 
