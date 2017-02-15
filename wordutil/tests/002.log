@@ -1,6 +1,0 @@
-
----- EXPECTED OUTPUT
-string(37) "百度***腾讯头条******小米oppo"
----- ACTUAL OUTPUT
-string(37) "百度ZZZ腾讯头条/home/小米oppo"
----- FAILED

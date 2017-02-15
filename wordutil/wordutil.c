@@ -30,8 +30,8 @@
 #include "ext/standard/info.h"
 #include "php_wordutil.h"
 
+#define PATTERN(p,r)    {{p,sizeof(p)-1},{r,sizeof(r)-1},{{0},0}}
 #define PATTERN_STR(p,r)    {{p,strlen(p)},{r,strlen(r)},{{0},0}}
-#define PATTERN(p,r)    {{p,sizeof(p) - 1},{r,sizeof(r) - 1},{{0},0}}
 #define CHUNK(c)        {c,sizeof(c)-1}
 
 #define DELIMITER '|'
@@ -41,7 +41,7 @@ AC_PATTERN_t patterns[] = {
     PATTERN("the ", ""),        /* Replace "the " with an empty string */
     PATTERN("滴滴", ""),        /* Replace "滴滴" with an empty string */
     PATTERN("阿里", ""),        /* Replace "阿里" with an empty string */
-    PATTERN("and", NULL),       /* Do not replace "and" */
+    PATTERN("oppo", "步步高"),       /* Do not replace "and" */
     PATTERN("experience", "[S2]"),
     PATTERN("exp", "[S3]"),
     PATTERN("simplicity", "[S4]"),
