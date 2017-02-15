@@ -48,6 +48,7 @@ extern zend_module_entry wordutil_module_entry;
 ZEND_BEGIN_MODULE_GLOBALS(wordutil)
 	char *patterns_path;
     AC_TRIE_t *trie;
+	char * replaced;
 	time_t pattern_conf_mtime;
 ZEND_END_MODULE_GLOBALS(wordutil)
 

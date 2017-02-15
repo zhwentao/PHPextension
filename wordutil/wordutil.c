@@ -107,7 +107,8 @@ PHP_FUNCTION(replace_word)
     multifast_rep_flush (WORDUTIL_G(trie), 0);
 
 	//返回替换后的字符串
-    RETURN_STRING(WORDUTIL_G(trie)->repdata.buffer.astring, strlen(WORDUTIL_G(trie)->repdata.buffer.astring));
+    RETURN_STRING(WORDUTIL_G(replaced), strlen(WORDUTIL_G(replaced)));
+    //RETURN_STRING(WORDUTIL_G(trie)->repdata.buffer.astring, strlen(WORDUTIL_G(trie)->repdata.buffer.astring));
 }
 /* }}} */
 
@@ -233,6 +234,9 @@ static inline void add_trie_node(char *pattern, char *replace) {
 
 static void listener (AC_TEXT_t *text, void *user)
 {
+	WORDUTIL_G(replaced) = (char *)emalloc(text->length + 1);
+	memset(WORDUTIL_G(replaced), '\0', text->length + 1);
+	strncpy(WORDUTIL_G(replaced), text->astring, text->length);
     printf ("listener: %.*s\r\n", (int)text->length, text->astring);
 }
 
