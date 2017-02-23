@@ -30,18 +30,18 @@
 #if PHP_VERSION_ID < 50500
 static void (*ori_execute)(zend_op_array *op_array TSRMLS_DC);
 static void (*ori_execute_internal)(zend_execute_data *execute_data_ptr, int return_value_used TSRMLS_DC);
-ZEND_API void pt_execute(zend_op_array *op_array TSRMLS_DC);
-ZEND_API void pt_execute_internal(zend_execute_data *execute_data, int return_value_used TSRMLS_DC);
+ZEND_API void pm_execute(zend_op_array *op_array TSRMLS_DC);
+ZEND_API void pm_execute_internal(zend_execute_data *execute_data, int return_value_used TSRMLS_DC);
 #elif PHP_VERSION_ID < 70000
 static void (*ori_execute_ex)(zend_execute_data *execute_data TSRMLS_DC);
 static void (*ori_execute_internal)(zend_execute_data *execute_data_ptr, zend_fcall_info *fci, int return_value_used TSRMLS_DC);
-ZEND_API void pt_execute_ex(zend_execute_data *execute_data TSRMLS_DC);
-ZEND_API void pt_execute_internal(zend_execute_data *execute_data, zend_fcall_info *fci, int return_value_used TSRMLS_DC);
+ZEND_API void pm_execute_ex(zend_execute_data *execute_data TSRMLS_DC);
+ZEND_API void pm_execute_internal(zend_execute_data *execute_data, zend_fcall_info *fci, int return_value_used TSRMLS_DC);
 #else
 static void (*ori_execute_ex)(zend_execute_data *execute_data);
 static void (*ori_execute_internal)(zend_execute_data *execute_data, zval *return_value);
-ZEND_API void pt_execute_ex(zend_execute_data *execute_data);
-ZEND_API void pt_execute_internal(zend_execute_data *execute_data, zval *return_value);
+ZEND_API void pm_execute_ex(zend_execute_data *execute_data);
+ZEND_API void pm_execute_internal(zend_execute_data *execute_data, zval *return_value);
 #endif
 
 /* If you declare any globals in php_sg_monitor.h uncomment this:
@@ -83,13 +83,13 @@ PHP_MINIT_FUNCTION(sg_monitor)
     /* Replace executor */
 #if PHP_VERSION_ID < 50500
     ori_execute = zend_execute;
-    zend_execute = pt_execute;
+    zend_execute = pm_execute;
 #else
     ori_execute_ex = zend_execute_ex;
-    zend_execute_ex = pt_execute_ex;
+    zend_execute_ex = pm_execute_ex;
 #endif
     ori_execute_internal = zend_execute_internal;
-    zend_execute_internal = pt_execute_internal;
+    zend_execute_internal = pm_execute_internal;
 	return SUCCESS;
 }
 /* }}} */
@@ -169,16 +169,44 @@ zend_module_entry sg_monitor_module_entry = {
 };
 /* }}} */
 
-/* {{{ pt_execute_core
+
+/* {{{ filter_frame 
+ * Filter frame by functin name
+ */
+static long filter_frame(zend_bool internal, zend_execute_data *ex, zend_op_array *op_array TSRMLS_DC)
+{
+    long dotrace = PTG(dotrace); 
+    
+    if (PTG(pft).type & (PT_FILTER_FUNCTION_NAME | PT_FILTER_CLASS_NAME)) {
+
+        zend_function *zf = obtain_zend_function(internal, ex, op_array);
+        
+        dotrace = 0;
+        
+        /* Filter function */
+        if ((PTG(pft).type & PT_FILTER_FUNCTION_NAME)) {
+            if((zf->common.function_name) && strstr(P7_STR(zf->common.function_name), PTG(pft).content) != NULL) {
+                dotrace = PTG(dotrace);
+            }
+        }
+
+    }
+
+    return dotrace;
+}
+/* }}} */
+
+
+/* {{{ pm_execute_core
  * Trace Executor Replacement
  * --------------------
  */ 
 #if PHP_VERSION_ID < 50500
-ZEND_API void pt_execute_core(int internal, zend_execute_data *execute_data, zend_op_array *op_array, int rvu TSRMLS_DC)
+ZEND_API void pm_execute_core(int internal, zend_execute_data *execute_data, zend_op_array *op_array, int rvu TSRMLS_DC)
 #elif PHP_VERSION_ID < 70000
-ZEND_API void pt_execute_core(int internal, zend_execute_data *execute_data, zend_fcall_info *fci, int rvu TSRMLS_DC)
+ZEND_API void pm_execute_core(int internal, zend_execute_data *execute_data, zend_fcall_info *fci, int rvu TSRMLS_DC)
 #else
-ZEND_API void pt_execute_core(int internal, zend_execute_data *execute_data, zval *return_value)
+ZEND_API void pm_execute_core(int internal, zend_execute_data *execute_data, zval *return_value)
 #endif
 {
 
@@ -228,38 +256,38 @@ ZEND_API void pt_execute_core(int internal, zend_execute_data *execute_data, zva
 /* }}} */
 
 
-/* {{{ pt_execute pt_execute_internal
+/* {{{ pm_execute pm_execute_internal
  * 
  */
 #if PHP_VERSION_ID < 50500
-ZEND_API void pt_execute(zend_op_array *op_array TSRMLS_DC)
+ZEND_API void pm_execute(zend_op_array *op_array TSRMLS_DC)
 {
-    pt_execute_core(0, EG(current_execute_data), op_array, 0 TSRMLS_CC);
+    pm_execute_core(0, EG(current_execute_data), op_array, 0 TSRMLS_CC);
 }
 
-ZEND_API void pt_execute_internal(zend_execute_data *execute_data, int return_value_used TSRMLS_DC)
+ZEND_API void pm_execute_internal(zend_execute_data *execute_data, int return_value_used TSRMLS_DC)
 {
-    pt_execute_core(1, execute_data, NULL, return_value_used TSRMLS_CC);
+    pm_execute_core(1, execute_data, NULL, return_value_used TSRMLS_CC);
 }
 #elif PHP_VERSION_ID < 70000
-ZEND_API void pt_execute_ex(zend_execute_data *execute_data TSRMLS_DC)
+ZEND_API void pm_execute_ex(zend_execute_data *execute_data TSRMLS_DC)
 {
-    pt_execute_core(0, execute_data, NULL, 0 TSRMLS_CC);
+    pm_execute_core(0, execute_data, NULL, 0 TSRMLS_CC);
 }
 
-ZEND_API void pt_execute_internal(zend_execute_data *execute_data, zend_fcall_info *fci, int return_value_used TSRMLS_DC)
+ZEND_API void pm_execute_internal(zend_execute_data *execute_data, zend_fcall_info *fci, int return_value_used TSRMLS_DC)
 {
-    pt_execute_core(1, execute_data, fci, return_value_used TSRMLS_CC);
+    pm_execute_core(1, execute_data, fci, return_value_used TSRMLS_CC);
 }
 #else
-ZEND_API void pt_execute_ex(zend_execute_data *execute_data)
+ZEND_API void pm_execute_ex(zend_execute_data *execute_data)
 {
-    pt_execute_core(0, execute_data, NULL);
+    pm_execute_core(0, execute_data, NULL);
 }
 
-ZEND_API void pt_execute_internal(zend_execute_data *execute_data, zval *return_value)
+ZEND_API void pm_execute_internal(zend_execute_data *execute_data, zval *return_value)
 {
-    pt_execute_core(1, execute_data, return_value);
+    pm_execute_core(1, execute_data, return_value);
 }
 #endif
 /* }}} */
