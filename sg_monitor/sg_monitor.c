@@ -27,6 +27,28 @@
 #include "ext/standard/info.h"
 #include "php_sg_monitor.h"
 
+/* Utils for PHP 7 */
+#if PHP_VERSION_ID < 70000
+#define P7_EX_OBJ(ex)   ex->object
+#define P7_EX_OBJCE(ex) Z_OBJCE_P(ex->object)
+#define P7_EX_OPARR(ex) ex->op_array
+#define P7_STR(v)       v
+#define P7_STR_LEN(v)   strlen(v)
+#else
+#define P7_EX_OBJ(ex)   Z_OBJ(ex->This)
+#define P7_EX_OBJCE(ex) Z_OBJCE(ex->This)
+#define P7_EX_OPARR(ex) (&(ex->func->op_array))
+#define P7_STR(v)       ZSTR_VAL(v)
+#define P7_STR_LEN(v)   ZSTR_LEN(v)
+#endif
+
+/*
+ * Function declarations
+ */
+static int uri_monitor();
+static int uri_send_stat();
+static inline zend_function *obtain_zend_function(zend_bool internal, zend_execute_data *ex, zend_op_array *op_array TSRMLS_DC);
+static long filter_frame(zend_bool internal, zend_execute_data *ex, zend_op_array *op_array TSRMLS_DC);
 #if PHP_VERSION_ID < 50500
 static void (*ori_execute)(zend_op_array *op_array TSRMLS_DC);
 static void (*ori_execute_internal)(zend_execute_data *execute_data_ptr, int return_value_used TSRMLS_DC);
@@ -44,42 +66,36 @@ ZEND_API void pm_execute_ex(zend_execute_data *execute_data);
 ZEND_API void pm_execute_internal(zend_execute_data *execute_data, zval *return_value);
 #endif
 
-/* If you declare any globals in php_sg_monitor.h uncomment this:
+/* globals in php_sg_monitor.h
+ */
 ZEND_DECLARE_MODULE_GLOBALS(sg_monitor)
-*/
 
 /* True global resources - no need for thread safety here */
 static int le_sg_monitor;
 
 /* {{{ PHP_INI
  */
-/* Remove comments and fill if you need to have entries in php.ini
 PHP_INI_BEGIN()
-    STD_PHP_INI_ENTRY("sg_monitor.global_value",      "42", PHP_INI_ALL, OnUpdateLong, global_value, zend_sg_monitor_globals, sg_monitor_globals)
-    STD_PHP_INI_ENTRY("sg_monitor.global_string", "foobar", PHP_INI_ALL, OnUpdateString, global_string, zend_sg_monitor_globals, sg_monitor_globals)
+    STD_PHP_INI_ENTRY("sg_monitor.enable",      "1", PHP_INI_SYSTEM, OnUpdateLong, enable, zend_sg_monitor_globals, sg_monitor_globals)
+    STD_PHP_INI_ENTRY("sg_monitor.function_names", "", PHP_INI_SYSTEM, OnUpdateString, function_names, zend_sg_monitor_globals, sg_monitor_globals)
 PHP_INI_END()
-*/
 /* }}} */
 
 
 /* {{{ php_sg_monitor_init_globals
  */
-/* Uncomment this function if you have INI entries
 static void php_sg_monitor_init_globals(zend_sg_monitor_globals *sg_monitor_globals)
 {
-	sg_monitor_globals->global_value = 0;
-	sg_monitor_globals->global_string = NULL;
+	sg_monitor_globals->enable = 0;
+	sg_monitor_globals->function_names = "abc";
 }
-*/
 /* }}} */
 
 /* {{{ PHP_MINIT_FUNCTION
  */
 PHP_MINIT_FUNCTION(sg_monitor)
 {
-	/* If you have INI entries, uncomment these lines 
 	REGISTER_INI_ENTRIES();
-	*/
     /* Replace executor */
 #if PHP_VERSION_ID < 50500
     ori_execute = zend_execute;
@@ -98,9 +114,7 @@ PHP_MINIT_FUNCTION(sg_monitor)
  */
 PHP_MSHUTDOWN_FUNCTION(sg_monitor)
 {
-	/* uncomment this line if you have INI entries
 	UNREGISTER_INI_ENTRIES();
-	*/
     /* Restore original executor */
 #if PHP_VERSION_ID < 50500
     zend_execute = ori_execute;
@@ -117,6 +131,7 @@ PHP_MSHUTDOWN_FUNCTION(sg_monitor)
  */
 PHP_RINIT_FUNCTION(sg_monitor)
 {
+	uri_monitor();
 	return SUCCESS;
 }
 /* }}} */
@@ -126,6 +141,8 @@ PHP_RINIT_FUNCTION(sg_monitor)
  */
 PHP_RSHUTDOWN_FUNCTION(sg_monitor)
 {
+	uri_send_stat();
+	printf("rshutdown\r\n");
 	return SUCCESS;
 }
 /* }}} */
@@ -138,9 +155,7 @@ PHP_MINFO_FUNCTION(sg_monitor)
 	php_info_print_table_header(2, "sg_monitor support", "enabled");
 	php_info_print_table_end();
 
-	/* Remove comments if you have entries in php.ini
 	DISPLAY_INI_ENTRIES();
-	*/
 }
 /* }}} */
 
@@ -170,32 +185,62 @@ zend_module_entry sg_monitor_module_entry = {
 /* }}} */
 
 
+/**
+ * Obtain zend function
+ * -------------------
+ */
+static inline zend_function *obtain_zend_function(zend_bool internal, zend_execute_data *ex, zend_op_array *op_array TSRMLS_DC)
+{
+#if PHP_VERSION_ID < 50500
+    if (internal || ex) {
+        return ex->function_state.function;
+    } else {
+        return (zend_function *) op_array;
+    }
+#elif PHP_VERSION_ID < 70000
+    return ex->function_state.function;
+#else
+    return ex->func;
+#endif
+}
+
+
 /* {{{ filter_frame 
  * Filter frame by functin name
  */
 static long filter_frame(zend_bool internal, zend_execute_data *ex, zend_op_array *op_array TSRMLS_DC)
 {
-    long dotrace = PTG(dotrace); 
+    long dotrace = 0; 
+
+    zend_function *zf = obtain_zend_function(internal, ex, op_array);
     
-    if (PTG(pft).type & (PT_FILTER_FUNCTION_NAME | PT_FILTER_CLASS_NAME)) {
-
-        zend_function *zf = obtain_zend_function(internal, ex, op_array);
-        
-        dotrace = 0;
-        
-        /* Filter function */
-        if ((PTG(pft).type & PT_FILTER_FUNCTION_NAME)) {
-            if((zf->common.function_name) && strstr(P7_STR(zf->common.function_name), PTG(pft).content) != NULL) {
-                dotrace = PTG(dotrace);
-            }
-        }
-
+    /* Filter function */
+    if((zf->common.function_name) && 
+			P7_STR_LEN(SMG(function_names)) &&
+			strstr(P7_STR(zf->common.function_name), SMG(function_names)) != NULL) {
+        dotrace = SMG(enable);
     }
-
     return dotrace;
 }
 /* }}} */
 
+/* {{{ uri_monitor
+ * monitor URI, record uri start time, create shmcache frame
+ */
+static int uri_monitor() 
+{
+    
+}
+/* }}} */
+
+/* {{{ uri_send_stat
+ * send uri statistic to share memory
+ */
+static int uri_send_stat()
+{
+
+}
+/* }}} */
 
 /* {{{ pm_execute_core
  * Trace Executor Replacement
@@ -209,6 +254,8 @@ ZEND_API void pm_execute_core(int internal, zend_execute_data *execute_data, zen
 ZEND_API void pm_execute_core(int internal, zend_execute_data *execute_data, zval *return_value)
 #endif
 {
+    long domonitor;
+	zend_bool dobailout = 0;
 
 	/*
 	 * TODO list:  
@@ -216,6 +263,17 @@ ZEND_API void pm_execute_core(int internal, zend_execute_data *execute_data, zva
 	 * monitor filter
 	 * save frame info
 	 */
+
+    /* Filter frame by function name*/
+#if PHP_VERSION_ID < 50500
+    domonitor = filter_frame(internal, execute_data, op_array TSRMLS_CC);
+#else
+    domonitor = filter_frame(internal, execute_data, NULL TSRMLS_CC);
+#endif
+  
+	if (domonitor) {
+	
+	}
 
     zend_try {
 #if PHP_VERSION_ID < 50500
@@ -252,6 +310,14 @@ ZEND_API void pm_execute_core(int internal, zend_execute_data *execute_data, zva
     } zend_catch {
 	
 	} zend_end_try();
+
+	if (domonitor) {
+	
+	}
+
+	if (dobailout) {
+	    zend_bailout();
+	}
 }
 /* }}} */
 

@@ -1,7 +1,8 @@
 <?php
 function foo() {
     $i = 1;
-    echo $i;
+//    echo $i;
+    //throw new Exception();
 }
 $start = microtime(true);
 $count = 100000;
