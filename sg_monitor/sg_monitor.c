@@ -80,6 +80,7 @@ static int le_sg_monitor;
 PHP_INI_BEGIN()
     STD_PHP_INI_ENTRY("sg_monitor.enable",      "1", PHP_INI_SYSTEM, OnUpdateLong, enable, zend_sg_monitor_globals, sg_monitor_globals)
     STD_PHP_INI_ENTRY("sg_monitor.function_names", "", PHP_INI_SYSTEM, OnUpdateString, function_names, zend_sg_monitor_globals, sg_monitor_globals)
+    STD_PHP_INI_ENTRY("sg_monitor.shmcache_conf", "", PHP_INI_SYSTEM, OnUpdateString, shmcache_conf, zend_sg_monitor_globals, sg_monitor_globals)
 PHP_INI_END()
 /* }}} */
 
@@ -89,7 +90,6 @@ PHP_INI_END()
 static void php_sg_monitor_init_globals(zend_sg_monitor_globals *sg_monitor_globals)
 {
 	sg_monitor_globals->enable = 0;
-	sg_monitor_globals->function_names = "abc";
 }
 /* }}} */
 

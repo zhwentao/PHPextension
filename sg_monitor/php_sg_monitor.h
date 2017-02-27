@@ -46,6 +46,7 @@ extern zend_module_entry sg_monitor_module_entry;
 ZEND_BEGIN_MODULE_GLOBALS(sg_monitor)
 	long  enable;
 	char *function_names;
+	char *shmcache_conf;
 
 	/*
 	 * Monitor var
