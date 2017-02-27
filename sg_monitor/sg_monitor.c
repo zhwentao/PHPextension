@@ -26,6 +26,8 @@
 #include "php_ini.h"
 #include "ext/standard/info.h"
 #include "php_sg_monitor.h"
+#include "shmcache.h"
+#include "monitor_type.h"
 
 /* Utils for PHP 7 */
 #if PHP_VERSION_ID < 70000
@@ -229,7 +231,7 @@ static long filter_frame(zend_bool internal, zend_execute_data *ex, zend_op_arra
  */
 static int uri_monitor() 
 {
-    
+    //record uri, cpu, mem, start_time
 }
 /* }}} */
 
@@ -238,7 +240,8 @@ static int uri_monitor()
  */
 static int uri_send_stat()
 {
-
+    //record uri, cpu, mem, spend_time
+	
 }
 /* }}} */
 
