@@ -22,12 +22,15 @@
 #include "config.h"
 #endif
 
+#include <sys/time.h>
 #include "php.h"
 #include "php_ini.h"
 #include "ext/standard/info.h"
 #include "php_sg_monitor.h"
 #include "shmcache.h"
 #include "monitor_type.h"
+
+#include "SAPI.h"
 
 /* Utils for PHP 7 */
 #if PHP_VERSION_ID < 70000
@@ -47,8 +50,9 @@
 /*
  * Function declarations
  */
-static int uri_monitor();
+static int uri_monitor_init();
 static int uri_send_stat();
+static int uri_monitor_filter();
 static inline zend_function *obtain_zend_function(zend_bool internal, zend_execute_data *ex, zend_op_array *op_array TSRMLS_DC);
 static long filter_frame(zend_bool internal, zend_execute_data *ex, zend_op_array *op_array TSRMLS_DC);
 #if PHP_VERSION_ID < 50500
@@ -79,6 +83,7 @@ static int le_sg_monitor;
  */
 PHP_INI_BEGIN()
     STD_PHP_INI_ENTRY("sg_monitor.enable",      "1", PHP_INI_SYSTEM, OnUpdateLong, enable, zend_sg_monitor_globals, sg_monitor_globals)
+    STD_PHP_INI_ENTRY("sg_monitor.domains", "", PHP_INI_SYSTEM, OnUpdateString, domains, zend_sg_monitor_globals, sg_monitor_globals)
     STD_PHP_INI_ENTRY("sg_monitor.function_names", "", PHP_INI_SYSTEM, OnUpdateString, function_names, zend_sg_monitor_globals, sg_monitor_globals)
     STD_PHP_INI_ENTRY("sg_monitor.shmcache_conf", "", PHP_INI_SYSTEM, OnUpdateString, shmcache_conf, zend_sg_monitor_globals, sg_monitor_globals)
 PHP_INI_END()
@@ -108,6 +113,11 @@ PHP_MINIT_FUNCTION(sg_monitor)
 #endif
     ori_execute_internal = zend_execute_internal;
     zend_execute_internal = pm_execute_internal;
+
+	//init shmcache
+	if ((shm_result = shmcache_init_from_file(&SMG(monitor_context), SMG(shmcache_conf))) != 0) {
+        SMG(enable) = 0;
+	}
 	return SUCCESS;
 }
 /* }}} */
@@ -133,7 +143,9 @@ PHP_MSHUTDOWN_FUNCTION(sg_monitor)
  */
 PHP_RINIT_FUNCTION(sg_monitor)
 {
-	uri_monitor();
+	if (uri_monitor_filter()) {
+	    uri_monitor_init();
+	}
 	return SUCCESS;
 }
 /* }}} */
@@ -143,8 +155,9 @@ PHP_RINIT_FUNCTION(sg_monitor)
  */
 PHP_RSHUTDOWN_FUNCTION(sg_monitor)
 {
-	uri_send_stat();
-	printf("rshutdown\r\n");
+	if (SMG(uri_need_monitor)) {
+	    uri_send_stat();
+	}
 	return SUCCESS;
 }
 /* }}} */
@@ -229,19 +242,55 @@ static long filter_frame(zend_bool internal, zend_execute_data *ex, zend_op_arra
 /* {{{ uri_monitor
  * monitor URI, record uri start time, create shmcache frame
  */
-static int uri_monitor() 
+static int uri_monitor_init() 
 {
-    //record uri, cpu, mem, start_time
+    //record uri, cpu, mem, start_time to uri_stat struct
+	SMG(uri_str) = SG(request_info).request_uri;
+	gettimeofday(&SMG(uri_start_time), NULL);
+	SMG(sg_uri_stat).uri_count += 1;
+}
+/* }}} */
+
+/* {{{ uri_monitor_filter
+ * filter dommain 
+ * set global var uri_need_monitor 1 need monitor, 0 skip monitor
+ */
+static int uri_monitor_filter()
+{
+	//TODO filter domain
+	SMG(uri_need_monitor) = (1 && SMG(enable));
+	return SMG(uri_need_monitor);
 }
 /* }}} */
 
 /* {{{ uri_send_stat
  * send uri statistic to share memory
+ * TODO shm init/set, cpu/mem usage, struct serialize
  */
 static int uri_send_stat()
 {
     //record uri, cpu, mem, spend_time
+	int shm_result;
+    int index;
+    char *config_filename;
+    struct shmcache_key_info key;
+    char *value;
+    int value_len;
+    int ttl;
 	
+
+	//set shmcache
+    key.data = argv[index++];
+    key.length = strlen(key.data);
+    value = argv[index++];
+    value_len = strlen(value);
+    ttl = atoi(argv[index++]);
+	shm_result = shmcache_set(&SMG(monitor_context), &key, value, value_len, ttl);
+
+	//error log
+	if (shm_result != 0) {
+	
+	}
 }
 /* }}} */
 

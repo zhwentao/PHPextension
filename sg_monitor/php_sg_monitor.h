@@ -44,14 +44,27 @@ extern zend_module_entry sg_monitor_module_entry;
 */
 
 ZEND_BEGIN_MODULE_GLOBALS(sg_monitor)
-	long  enable;
+	/**
+	 *config var
+	 */
+	zend_bool enable;
+	char *domains;
 	char *function_names;
 	char *shmcache_conf;
 
-	/*
+	/**
+	 * Monitor ctrl var
+	 */
+	zend_bool uri_need_monitor;
+	struct shmcache_context monitor_context;
+
+	/**
 	 * Monitor var
 	 */
-	long uri_start_time;
+	char *uri_str;
+	timeval uri_start_time;
+    uri_stat sg_uri_stat;
+
 ZEND_END_MODULE_GLOBALS(sg_monitor)
 
 /* In every utility function you add that needs to use variables 
