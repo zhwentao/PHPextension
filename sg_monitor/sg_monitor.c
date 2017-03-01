@@ -22,14 +22,11 @@
 #include "config.h"
 #endif
 
-#include <sys/time.h>
 #include <msgpack.h>
 #include "php.h"
 #include "php_ini.h"
 #include "ext/standard/info.h"
 #include "php_sg_monitor.h"
-#include "shmcache.h"
-#include "monitor_type.h"
 
 #include "SAPI.h"
 
@@ -54,6 +51,12 @@
 static int uri_monitor_init();
 static int uri_send_stat();
 static int uri_monitor_filter();
+
+static msgpack_sbuffer msgpack_serialize_uri_stat(uri_stat *stat);
+static int msgpack_unserialize_uri_stat(smart_str *buf);
+static int msgpack_serialize_func_stat(func_stat *stat);
+static int msgpack_unserialize_func_stat();
+
 static inline zend_function *obtain_zend_function(zend_bool internal, zend_execute_data *ex, zend_op_array *op_array TSRMLS_DC);
 static long filter_frame(zend_bool internal, zend_execute_data *ex, zend_op_array *op_array TSRMLS_DC);
 #if PHP_VERSION_ID < 50500
@@ -86,7 +89,7 @@ PHP_INI_BEGIN()
     STD_PHP_INI_ENTRY("sg_monitor.enable",      "1", PHP_INI_SYSTEM, OnUpdateLong, enable, zend_sg_monitor_globals, sg_monitor_globals)
     STD_PHP_INI_ENTRY("sg_monitor.domains", "", PHP_INI_SYSTEM, OnUpdateString, domains, zend_sg_monitor_globals, sg_monitor_globals)
     STD_PHP_INI_ENTRY("sg_monitor.function_names", "", PHP_INI_SYSTEM, OnUpdateString, function_names, zend_sg_monitor_globals, sg_monitor_globals)
-    STD_PHP_INI_ENTRY("sg_monitor.shmcache_conf", "", PHP_INI_SYSTEM, OnUpdateString, shmcache_conf, zend_sg_monitor_globals, sg_monitor_globals)
+    STD_PHP_INI_ENTRY("sg_monitor.shmcache_conf", "/etc/libshmcache.conf", PHP_INI_SYSTEM, OnUpdateString, shmcache_conf, zend_sg_monitor_globals, sg_monitor_globals)
 PHP_INI_END()
 /* }}} */
 
@@ -116,6 +119,7 @@ PHP_MINIT_FUNCTION(sg_monitor)
     zend_execute_internal = pm_execute_internal;
 
 	//init shmcache
+	int shm_result;
 	if ((shm_result = shmcache_init_from_file(&SMG(monitor_context), SMG(shmcache_conf))) != 0) {
         SMG(enable) = 0;
 	}
@@ -275,24 +279,89 @@ static int uri_send_stat()
     int index;
     char *config_filename;
     struct shmcache_key_info key;
-    char *value;
-    int value_len;
-    int ttl;
-	
+    msgpack_sbuffer value;
+	smart_str msgbuf;
 
-	//set shmcache
-    key.data = argv[index++];
+	/**
+	 * Get uri stat with key 
+	 * Key format: uri_timestamp
+	 */
+	//TODO msgpack set shmcache
+    key.data = "k0";
     key.length = strlen(key.data);
-    value = argv[index++];
-    value_len = strlen(value);
-    ttl = atoi(argv[index++]);
-	shm_result = shmcache_set(&SMG(monitor_context), &key, value, value_len, ttl);
+    value = msgpack_serialize_uri_stat(&SMG(sg_uri_stat));
+	shm_result = shmcache_set(&SMG(monitor_context), &key, value.data, value.size, SHMCACHE_NEVER_EXPIRED);
+
+	//test unserialize
+	smart_str_setl(&msgbuf, value.data, value.size);
+	msgpack_unserialize_uri_stat(&msgbuf);
 
 	//TODO error log
 	if (shm_result != 0) {
 	
 	}
 }
+/* }}} */
+
+/** {{{ msgpack_serialize_uri_stat
+ *
+ */
+static msgpack_sbuffer msgpack_serialize_uri_stat(uri_stat *stat) 
+{
+    msgpack_sbuffer sbuf;
+    msgpack_sbuffer_init(&sbuf);
+
+	/* serialize values into the buffer using msgpack_sbuffer_write callback function. */
+	msgpack_packer pk;
+	msgpack_packer_init(&pk, &sbuf, msgpack_sbuffer_write);
+
+    msgpack_pack_array(&pk, 6);
+	msgpack_pack_int(&pk, stat->cpu_load);
+	msgpack_pack_int(&pk, stat->mem_phys);
+	msgpack_pack_int(&pk, stat->mem_virt);
+	msgpack_pack_int(&pk, stat->latency);
+	msgpack_pack_int(&pk, stat->uri_count);
+	msgpack_pack_int(&pk, stat->failed_count);
+
+	return sbuf;
+}
+/* }}} */
+
+/** {{{ msgpack_unserialize_uri_stat
+ *
+ */
+static int msgpack_unserialize_uri_stat(smart_str *buf) 
+{
+	/* deserialize the buffer into msgpack_object instance. */
+	/* deserialized object is valid during the msgpack_zone instance alive. */
+	msgpack_zone mempool;
+    msgpack_zone_init(&mempool, 2048);
+
+	msgpack_object deserialized;
+	msgpack_unpack(buf->c, buf->len, NULL, &mempool, &deserialized);
+
+	/* print the deserialized object. */
+	msgpack_object_print(stdout, deserialized);
+	puts("");
+
+	msgpack_zone_destroy(&mempool);
+	return 0;
+}
+/* }}} */
+
+
+/** {{{ msgpack_serialize_func_stat
+ *
+ */
+static int msgpack_serialize_func_stat(func_stat *stat)
+{}
+/* }}} */
+
+/** {{{ msgpack_unserialize_func_stat
+ *
+ */
+static int msgpack_unserialize_func_stat() 
+{}
 /* }}} */
 
 /* {{{ pm_execute_core

@@ -38,6 +38,10 @@ extern zend_module_entry sg_monitor_module_entry;
 #include "TSRM.h"
 #endif
 
+#include <sys/time.h>
+#include "monitor_type.h"
+#include "shmcache.h"
+#include "ext/standard/php_smart_str.h" /* for smart_str */
 /* 
   	Declare any global variables you may need between the BEGIN
 	and END macros here:     
@@ -62,7 +66,7 @@ ZEND_BEGIN_MODULE_GLOBALS(sg_monitor)
 	 * Monitor var
 	 */
 	char *uri_str;
-	timeval uri_start_time;
+	struct timeval uri_start_time;
     uri_stat sg_uri_stat;
 
 ZEND_END_MODULE_GLOBALS(sg_monitor)

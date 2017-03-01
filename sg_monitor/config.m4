@@ -40,8 +40,19 @@ if test "$PHP_SG_MONITOR" != "no"; then
   dnl   AC_MSG_ERROR([Please reinstall the sg_monitor distribution])
   dnl fi
 
+
+  if test -z "$ROOT"; then
+	ROOT=/usr
+  fi
   dnl # --with-sg_monitor -> add include path
   dnl PHP_ADD_INCLUDE($SG_MONITOR_DIR/include)
+
+  PHP_ADD_INCLUDE($ROOT/include/fastcommon)
+  PHP_ADD_INCLUDE($ROOT/include/shmcache)
+ 
+  PHP_ADD_LIBRARY_WITH_PATH(fastcommon, $ROOT/lib, SG_MONITOR_SHARED_LIBADD)
+  PHP_ADD_LIBRARY_WITH_PATH(shmcache, $ROOT/lib, SG_MONITOR_SHARED_LIBADD)
+  PHP_ADD_LIBRARY_WITH_PATH(msgpackc, /usr/local/lib, SG_MONITOR_SHARED_LIBADD)
 
   dnl # --with-sg_monitor -> check for lib and symbol presence
   dnl LIBNAME=sg_monitor # you may want to change this
@@ -57,7 +68,7 @@ if test "$PHP_SG_MONITOR" != "no"; then
   dnl   -L$SG_MONITOR_DIR/$PHP_LIBDIR -lm
   dnl ])
   dnl
-  dnl PHP_SUBST(SG_MONITOR_SHARED_LIBADD)
+  PHP_SUBST(SG_MONITOR_SHARED_LIBADD)
 
   PHP_NEW_EXTENSION(sg_monitor, sg_monitor.c, $ext_shared)
 fi
