@@ -39,8 +39,11 @@ extern zend_module_entry sg_monitor_module_entry;
 #endif
 
 #include <sys/time.h>
+#include <msgpack.h>
 #include "monitor_type.h"
 #include "shmcache.h"
+#include "ext/standard/info.h"
+#include "ext/standard/md5.h"
 #include "ext/standard/php_smart_str.h" /* for smart_str */
 /* 
   	Declare any global variables you may need between the BEGIN

@@ -22,10 +22,8 @@
 #include "config.h"
 #endif
 
-#include <msgpack.h>
 #include "php.h"
 #include "php_ini.h"
-#include "ext/standard/info.h"
 #include "php_sg_monitor.h"
 
 #include "SAPI.h"
@@ -52,10 +50,14 @@ static int uri_monitor_init();
 static int uri_send_stat();
 static int uri_monitor_filter();
 
-static msgpack_sbuffer msgpack_serialize_uri_stat(uri_stat *stat);
-static int msgpack_unserialize_uri_stat(smart_str *buf);
+static smart_str msgpack_serialize_uri_stat(uri_stat *stat);
+static msgpack_object msgpack_unserialize_uri_stat(struct shmcache_value_info *buf);
 static int msgpack_serialize_func_stat(func_stat *stat);
 static int msgpack_unserialize_func_stat();
+
+static int accumulate_uri(msgpack_object o, uri_stat *sg_uri_stat);
+static int gen_shm_uri_key(char *domain_uri_str, char *key);
+static int gen_md5_str(char *str, char *md5str);
 
 static inline zend_function *obtain_zend_function(zend_bool internal, zend_execute_data *ex, zend_op_array *op_array TSRMLS_DC);
 static long filter_frame(zend_bool internal, zend_execute_data *ex, zend_op_array *op_array TSRMLS_DC);
@@ -148,6 +150,7 @@ PHP_MSHUTDOWN_FUNCTION(sg_monitor)
  */
 PHP_RINIT_FUNCTION(sg_monitor)
 {
+    //init domain uri
 	if (uri_monitor_filter()) {
 	    uri_monitor_init();
 	}
@@ -262,6 +265,10 @@ static int uri_monitor_init()
  */
 static int uri_monitor_filter()
 {
+	//TODO SAPI filter, not http request disable monitor
+	if (!SG(request_info).request_method) {
+		SMG(enable) = 0;
+	}
 	//TODO filter domain
 	SMG(uri_need_monitor) = (1 && SMG(enable));
 	return SMG(uri_need_monitor);
@@ -270,7 +277,7 @@ static int uri_monitor_filter()
 
 /* {{{ uri_send_stat
  * send uri statistic to share memory
- * TODO shm init/set, cpu/mem usage, struct serialize
+ * TODO cpu/mem usage, uri error, gen shm key
  */
 static int uri_send_stat()
 {
@@ -278,37 +285,63 @@ static int uri_send_stat()
 	int shm_result;
     int index;
     char *config_filename;
+	char md5_key[33];
     struct shmcache_key_info key;
-    msgpack_sbuffer value;
-	smart_str msgbuf;
+    struct shmcache_value_info shm_value;
+	msgpack_object deserialized;
+
+	smart_str value;
+	//Calculate current uri stat
+	struct timeval end_time;
+	gettimeofday(&end_time, NULL);
+	//除以1000则进行毫秒计时，如果除以1000000则进行秒级别计时，如果除以1则进行微妙级别计时
+	SMG(sg_uri_stat).latency = 1000*(end_time.tv_sec - SMG(uri_start_time).tv_sec) + (end_time.tv_usec - SMG(uri_start_time).tv_usec)/1000; 
+	
+	//if failed count ++
+	SMG(sg_uri_stat).failed_count++;
 
 	/**
 	 * Get uri stat with key 
-	 * Key format: uri_timestamp
+	 * Key format: md5(domain_uri_timestamp)
 	 */
-	//TODO msgpack set shmcache
-    key.data = "k0";
-    key.length = strlen(key.data);
+	//TODO cat domain-uri-time str
+	//char * domain_uri = (char *)emalloc(P7_STR_LEN() + P7_STR_LEN() + 4 + 1);
+    gen_md5_str("k1", md5_key);
+    key.data = md5_key;
+    key.length = P7_STR_LEN(key.data);
+
+	shm_result = shmcache_get(&SMG(monitor_context), &key, &shm_value);
+
+	//Key not exist
+	if (shm_result != 0) {
+	
+	} else {
+		//accumulate uri stat
+	    deserialized = msgpack_unserialize_uri_stat(&shm_value);
+		accumulate_uri(deserialized, &SMG(sg_uri_stat));
+	}
+
+
+	//set value
     value = msgpack_serialize_uri_stat(&SMG(sg_uri_stat));
-	shm_result = shmcache_set(&SMG(monitor_context), &key, value.data, value.size, SHMCACHE_NEVER_EXPIRED);
+	shm_result = shmcache_set(&SMG(monitor_context), &key, value.c, value.len, SHMCACHE_NEVER_EXPIRED);
 
 	//test unserialize
-	smart_str_setl(&msgbuf, value.data, value.size);
-	msgpack_unserialize_uri_stat(&msgbuf);
 
 	//TODO error log
 	if (shm_result != 0) {
-	
-	}
+
+    }
 }
 /* }}} */
 
 /** {{{ msgpack_serialize_uri_stat
  *
  */
-static msgpack_sbuffer msgpack_serialize_uri_stat(uri_stat *stat) 
+static smart_str msgpack_serialize_uri_stat(uri_stat *stat) 
 {
     msgpack_sbuffer sbuf;
+	smart_str msgstr;
     msgpack_sbuffer_init(&sbuf);
 
 	/* serialize values into the buffer using msgpack_sbuffer_write callback function. */
@@ -323,14 +356,15 @@ static msgpack_sbuffer msgpack_serialize_uri_stat(uri_stat *stat)
 	msgpack_pack_int(&pk, stat->uri_count);
 	msgpack_pack_int(&pk, stat->failed_count);
 
-	return sbuf;
+	smart_str_setl(&msgstr, sbuf.data, sbuf.size);
+	return msgstr;
 }
 /* }}} */
 
 /** {{{ msgpack_unserialize_uri_stat
  *
  */
-static int msgpack_unserialize_uri_stat(smart_str *buf) 
+static msgpack_object msgpack_unserialize_uri_stat(struct shmcache_value_info *buf) 
 {
 	/* deserialize the buffer into msgpack_object instance. */
 	/* deserialized object is valid during the msgpack_zone instance alive. */
@@ -338,14 +372,13 @@ static int msgpack_unserialize_uri_stat(smart_str *buf)
     msgpack_zone_init(&mempool, 2048);
 
 	msgpack_object deserialized;
-	msgpack_unpack(buf->c, buf->len, NULL, &mempool, &deserialized);
+	msgpack_unpack(buf->data, buf->length, NULL, &mempool, &deserialized);
 
-	/* print the deserialized object. */
+	/* TODO DEBUG print the deserialized object. */
 	msgpack_object_print(stdout, deserialized);
-	puts("");
 
 	msgpack_zone_destroy(&mempool);
-	return 0;
+	return deserialized;
 }
 /* }}} */
 
@@ -362,6 +395,62 @@ static int msgpack_serialize_func_stat(func_stat *stat)
  */
 static int msgpack_unserialize_func_stat() 
 {}
+/* }}} */
+
+/** {{{ accumulate_uri
+ * Accumulate uri stat
+ * [cpu_load, mem_phys, mem_virt, latency, uri_count, failed_count]
+ */
+static int accumulate_uri(msgpack_object o, uri_stat *uri_stat_ptr) 
+{
+    if (MSGPACK_OBJECT_ARRAY == o.type && o.via.array.size != 0) {
+	    msgpack_object* p = o.via.array.ptr;
+		msgpack_object* const pend = o.via.array.ptr + o.via.array.size;
+
+	    int64_t stat[6];
+	    int i = 0;
+		for (; p < pend; ++p, ++i) {
+			if (MSGPACK_OBJECT_NEGATIVE_INTEGER == p->type) {
+				stat[i] = p->via.i64;
+			} else if (MSGPACK_OBJECT_POSITIVE_INTEGER == p->type) {
+				stat[i] = p->via.u64;
+			} else {
+                stat[i] = 0;
+			}
+		}
+	    uri_stat_ptr->latency      = uri_stat_ptr->latency + stat[3];
+	    uri_stat_ptr->uri_count    = stat[4] + 1;
+	    uri_stat_ptr->failed_count = stat[5] + 1;
+	}
+}
+/* }}} */
+
+/** {{{ gen_md5_str
+ * Generate md5 string
+ */
+static int gen_md5_str(char *str, char *md5)
+{
+	PHP_MD5_CTX context;
+	char md5str[33];
+	unsigned char digest[16];
+	md5str[0] = '\0';
+
+	PHP_MD5Init(&context);
+	PHP_MD5Update(&context, P7_STR(str), P7_STR_LEN(str));
+	PHP_MD5Final(digest, &context);
+	make_digest_ex(md5str, digest, 16);
+    strcpy(md5, md5str);
+	return P7_STR_LEN(md5);
+}
+/* }}} */
+
+/** {{{ gen_shm_uri_key
+ *
+ */
+static int gen_shm_uri_key(char *domain_uri_str, char *key)
+{
+}
+
 /* }}} */
 
 /* {{{ pm_execute_core
