@@ -68,7 +68,9 @@ ZEND_BEGIN_MODULE_GLOBALS(sg_monitor)
 	/**
 	 * Monitor var
 	 */
-	char *uri_str;
+	char *current_domain;
+	char *current_uri_str;
+	char *current_domain_uri;
 	struct timeval uri_start_time;
     uri_stat sg_uri_stat;
 

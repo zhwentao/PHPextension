@@ -70,5 +70,5 @@ if test "$PHP_SG_MONITOR" != "no"; then
   dnl
   PHP_SUBST(SG_MONITOR_SHARED_LIBADD)
 
-  PHP_NEW_EXTENSION(sg_monitor, sg_monitor.c, $ext_shared)
+  PHP_NEW_EXTENSION(sg_monitor, sg_monitor.c get_cpu.c, $ext_shared)
 fi

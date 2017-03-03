@@ -25,6 +25,7 @@
 #include "php.h"
 #include "php_ini.h"
 #include "php_sg_monitor.h"
+#include "get_cpu.h"
 
 #include "SAPI.h"
 
@@ -58,6 +59,10 @@ static int msgpack_unserialize_func_stat();
 static int accumulate_uri(msgpack_object o, uri_stat *sg_uri_stat);
 static int gen_shm_uri_key(char *domain_uri_str, char *key);
 static int gen_md5_str(char *str, char *md5str);
+
+static zval * request_server_query(char * name, uint len TSRMLS_DC);
+
+//static unsigned int get_cpu_total_occupy();
 
 static inline zend_function *obtain_zend_function(zend_bool internal, zend_execute_data *ex, zend_op_array *op_array TSRMLS_DC);
 static long filter_frame(zend_bool internal, zend_execute_data *ex, zend_op_array *op_array TSRMLS_DC);
@@ -150,7 +155,7 @@ PHP_MSHUTDOWN_FUNCTION(sg_monitor)
  */
 PHP_RINIT_FUNCTION(sg_monitor)
 {
-    //init domain uri
+	//filter
 	if (uri_monitor_filter()) {
 	    uri_monitor_init();
 	}
@@ -253,9 +258,12 @@ static long filter_frame(zend_bool internal, zend_execute_data *ex, zend_op_arra
 static int uri_monitor_init() 
 {
     //record uri, cpu, mem, start_time to uri_stat struct
-	SMG(uri_str) = SG(request_info).request_uri;
+	
+	SMG(current_uri_str) = SG(request_info).request_uri;
 	gettimeofday(&SMG(uri_start_time), NULL);
-	SMG(sg_uri_stat).uri_count += 1;
+	SMG(sg_uri_stat).cpu_load= get_cpu_total_occupy();
+	SMG(sg_uri_stat).uri_count = 1;
+	SMG(sg_uri_stat).failed_count = 0;
 }
 /* }}} */
 
@@ -265,9 +273,19 @@ static int uri_monitor_init()
  */
 static int uri_monitor_filter()
 {
-	//TODO SAPI filter, not http request disable monitor
+	//SAPI filter, not http request disable monitor
 	if (!SG(request_info).request_method) {
 		SMG(enable) = 0;
+	} else {
+        //init domain uri
+	    zval* host = request_server_query("HTTP_HOST", sizeof("HTTP_HOST"));
+	    zval* uri = request_server_query("REQUEST_URI", sizeof("REQUEST_URI"));
+	    SMG(current_domain) = Z_STRVAL_P(host);
+	    SMG(current_uri_str) = Z_STRVAL_P(uri);
+	    char *domain_uri = (char *)emalloc(P7_STR_LEN(SMG(current_domain)) + P7_STR_LEN(SMG(current_uri_str)) + 1);
+	    strcpy(domain_uri, SMG(current_domain));
+	    strcat(domain_uri, SMG(current_uri_str));
+	    SMG(current_domain_uri) = domain_uri;
 	}
 	//TODO filter domain
 	SMG(uri_need_monitor) = (1 && SMG(enable));
@@ -298,15 +316,13 @@ static int uri_send_stat()
 	SMG(sg_uri_stat).latency = 1000*(end_time.tv_sec - SMG(uri_start_time).tv_sec) + (end_time.tv_usec - SMG(uri_start_time).tv_usec)/1000; 
 	
 	//if failed count ++
-	SMG(sg_uri_stat).failed_count++;
+	SMG(sg_uri_stat).failed_count = 1;
 
 	/**
 	 * Get uri stat with key 
 	 * Key format: md5(domain_uri_timestamp)
 	 */
-	//TODO cat domain-uri-time str
-	//char * domain_uri = (char *)emalloc(P7_STR_LEN() + P7_STR_LEN() + 4 + 1);
-    gen_md5_str("k1", md5_key);
+    gen_shm_uri_key(SMG(current_domain_uri), md5_key);
     key.data = md5_key;
     key.length = P7_STR_LEN(key.data);
 
@@ -375,7 +391,7 @@ static msgpack_object msgpack_unserialize_uri_stat(struct shmcache_value_info *b
 	msgpack_unpack(buf->data, buf->length, NULL, &mempool, &deserialized);
 
 	/* TODO DEBUG print the deserialized object. */
-	msgpack_object_print(stdout, deserialized);
+	//msgpack_object_print(stdout, deserialized);
 
 	msgpack_zone_destroy(&mempool);
 	return deserialized;
@@ -418,9 +434,13 @@ static int accumulate_uri(msgpack_object o, uri_stat *uri_stat_ptr)
                 stat[i] = 0;
 			}
 		}
-	    uri_stat_ptr->latency      = uri_stat_ptr->latency + stat[3];
+		//max cpu occupy
+		if (uri_stat_ptr->cpu_load < stat[0]) {
+		    uri_stat_ptr->cpu_load = stat[0];
+		}
+	    uri_stat_ptr->latency      += stat[3];
 	    uri_stat_ptr->uri_count    = stat[4] + 1;
-	    uri_stat_ptr->failed_count = stat[5] + 1;
+	    uri_stat_ptr->failed_count += stat[5];
 	}
 }
 /* }}} */
@@ -445,13 +465,69 @@ static int gen_md5_str(char *str, char *md5)
 /* }}} */
 
 /** {{{ gen_shm_uri_key
- *
+ * key string format: domain:uri:timesec
  */
 static int gen_shm_uri_key(char *domain_uri_str, char *key)
 {
+    char * tmp;
+	char timeslot[6];
+	sprintf(timeslot, "%d", (SMG(uri_start_time).tv_sec)%3600);
+	size_t tmp_len = P7_STR_LEN(domain_uri_str) + P7_STR_LEN(timeslot) + 1;
+    tmp = (char *)emalloc(tmp_len);
+    strcpy(tmp, domain_uri_str);
+    strncat(tmp, timeslot, tmp_len);
+	//PHPWRITE(tmp, P7_STR_LEN(tmp));
+	gen_md5_str(tmp, key);
+	efree(tmp);
+	//PHPWRITE(key, P7_STR_LEN(key));
+	return P7_STR_LEN(key);
 }
 
 /* }}} */
+
+/** {{{
+ * 
+ */
+static zval * request_server_query(char * name, uint name_len TSRMLS_DC)
+{
+	zval **carrier = NULL, **ret;
+
+#if (PHP_MAJOR_VERSION == 5) && (PHP_MINOR_VERSION < 4)
+	zend_bool jit_initialization = (PG(auto_globals_jit) && !PG(register_globals) && !PG(register_long_arrays));
+#else
+	zend_bool jit_initialization = PG(auto_globals_jit);
+#endif
+	if (jit_initialization) {
+	    zend_is_auto_global(ZEND_STRL("_SERVER") TSRMLS_CC);
+	}
+	carrier = &PG(http_globals)[TRACK_VARS_SERVER];
+
+	if (zend_hash_find(Z_ARRVAL_PP(carrier), name, P7_STR_LEN(name) + 1, (void **)&ret) == FAILURE) {
+	    zval *empty;
+		MAKE_STD_ZVAL(empty);
+		ZVAL_NULL(empty);
+		return empty;
+	}
+
+	Z_ADDREF_P(*ret);
+	return *ret;
+}
+/* }}} */
+
+//unsigned int get_cpu_total_occupy()
+//{
+//    FILE *fd;         //定义文件指针fd
+//    char buff[1024] = {0};  //定义局部变量buff数组为char类型大小为1024
+//    total_cpu_occupy_t t;
+//    fd = fopen ("/proc/stat", "r"); //以R读的方式打开stat文件再赋给指针fd
+//    fgets (buff, sizeof(buff), fd); //从fd文件中读取长度为buff的字符串再存到起始地址为buff这个空间里
+//    /*下面是将buff的字符串根据参数format后转换为数据的结果存入相应的结构体参数 */
+//    char name[16];//暂时用来存放字符串
+//    sscanf (buff, "%s %u %u %u %u", name, &t.user, &t.nice,&t.system, &t.idle);
+//    
+//    fclose(fd);     //关闭文件fd
+//    return ((t.user + t.nice + t.system)*100)/(t.user + t.nice + t.system + t.idle);
+//}
 
 /* {{{ pm_execute_core
  * Trace Executor Replacement
