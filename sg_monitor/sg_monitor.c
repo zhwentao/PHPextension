@@ -315,8 +315,14 @@ static int uri_send_stat()
 	//除以1000则进行毫秒计时，如果除以1000000则进行秒级别计时，如果除以1则进行微妙级别计时
 	SMG(sg_uri_stat).latency = 1000*(end_time.tv_sec - SMG(uri_start_time).tv_sec) + (end_time.tv_usec - SMG(uri_start_time).tv_usec)/1000; 
 	
-	//if failed count ++
-	SMG(sg_uri_stat).failed_count = 1;
+	//
+	
+	//if exit status != 0
+	if (EG(exit_status) == 0) {
+	    SMG(sg_uri_stat).failed_count = 0;
+	} else {
+	    SMG(sg_uri_stat).failed_count = 1;
+	}
 
 	/**
 	 * Get uri stat with key 
@@ -595,7 +601,7 @@ ZEND_API void pm_execute_core(int internal, zend_execute_data *execute_data, zva
         }
 #endif
     } zend_catch {
-	
+	    printf("\r\nzend catch\r\n");
 	} zend_end_try();
 
 	if (domonitor) {
