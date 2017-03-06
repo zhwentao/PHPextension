@@ -58,6 +58,7 @@ ZEND_BEGIN_MODULE_GLOBALS(sg_monitor)
 	char *domains;
 	char *function_names;
 	char *shmcache_conf;
+	char *domain_uri_key;
 
 	/**
 	 * Monitor ctrl var
@@ -73,6 +74,7 @@ ZEND_BEGIN_MODULE_GLOBALS(sg_monitor)
 	char *current_domain_uri;
 	struct timeval uri_start_time;
     uri_stat sg_uri_stat;
+    zend_bool failed;
 
 ZEND_END_MODULE_GLOBALS(sg_monitor)
 

@@ -3,7 +3,7 @@ extern "C"{
 #endif
 
 #define VMRSS_LINE 15//VMRSS所在行
-#define PROCESS_ITEM 14//进程CPU时间开始的项数
+#define VMVSZ_LINE 12//VMVSZ所在行
 
 typedef struct        //声明一个occupy的结构体
 {
@@ -13,25 +13,12 @@ typedef struct        //声明一个occupy的结构体
     unsigned int idle;  //从系统启动开始累计到当前时刻，除IO等待时间以外的其它等待时间iowait (12256) 从系统启动开始累计到当前时刻，IO等待时间(since 2.5.41)
 }total_cpu_occupy_t;
 
-typedef struct
-{
-    pid_t pid;//pid号
-    unsigned int utime;  //该任务在用户态运行的时间，单位为jiffies
-    unsigned int stime;  //该任务在核心态运行的时间，单位为jiffies
-    unsigned int cutime;//所有已死线程在用户态运行的时间，单位为jiffies
-    unsigned int cstime;  //所有已死在核心态运行的时间，单位为jiffies
-}process_cpu_occupy_t;
-
-int get_phy_mem(const pid_t p);//获取占用物理内存
 int get_total_mem();//获取系统总内存
-extern unsigned int get_cpu_total_occupy();//获取总的CPU时间
-unsigned int get_cpu_process_occupy(const pid_t p);//获取进程的CPU时间
-const char* get_items(const char* buffer,int ie);//取得缓冲区指定项的起始地址
-		        
-extern float get_pcpu(pid_t p);//获取进程CPU占用
-extern float get_pmem(pid_t p);//获取进程内存占用
-extern int get_rmem(pid_t p);//获取真实物理内存
 
+extern unsigned int get_cpu_total_occupy();//获取总的CPU时间
+extern int get_phy_mem(const pid_t p);//获取占用物理内存
+extern int get_vsz_mem(const pid_t p);//获取占用物理内存
+		        
 #ifdef __cplusplus
 }
 #endif

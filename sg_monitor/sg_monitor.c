@@ -52,17 +52,20 @@ static int uri_send_stat();
 static int uri_monitor_filter();
 
 static smart_str msgpack_serialize_uri_stat(uri_stat *stat);
-static msgpack_object msgpack_unserialize_uri_stat(struct shmcache_value_info *buf);
+static msgpack_object msgpack_unserialize(struct shmcache_value_info *buf);
 static int msgpack_serialize_func_stat(func_stat *stat);
 static int msgpack_unserialize_func_stat();
+static smart_str msgpack_serialize_domain_uri(char *domain, char *uri);
 
 static int accumulate_uri(msgpack_object o, uri_stat *sg_uri_stat);
 static int gen_shm_uri_key(char *domain_uri_str, char *key);
 static int gen_md5_str(char *str, char *md5str);
 
+static int add_domain_uri(char *domain, char *uri);
+static int append_msgpack_domain_uri(char **domain_uri, msgpack_object *o = NULL);
+
 static zval * request_server_query(char * name, uint len TSRMLS_DC);
 
-//static unsigned int get_cpu_total_occupy();
 
 static inline zend_function *obtain_zend_function(zend_bool internal, zend_execute_data *ex, zend_op_array *op_array TSRMLS_DC);
 static long filter_frame(zend_bool internal, zend_execute_data *ex, zend_op_array *op_array TSRMLS_DC);
@@ -97,6 +100,7 @@ PHP_INI_BEGIN()
     STD_PHP_INI_ENTRY("sg_monitor.domains", "", PHP_INI_SYSTEM, OnUpdateString, domains, zend_sg_monitor_globals, sg_monitor_globals)
     STD_PHP_INI_ENTRY("sg_monitor.function_names", "", PHP_INI_SYSTEM, OnUpdateString, function_names, zend_sg_monitor_globals, sg_monitor_globals)
     STD_PHP_INI_ENTRY("sg_monitor.shmcache_conf", "/etc/libshmcache.conf", PHP_INI_SYSTEM, OnUpdateString, shmcache_conf, zend_sg_monitor_globals, sg_monitor_globals)
+    STD_PHP_INI_ENTRY("sg_monitor.domain_uri_key", "papi_domain_uri_key", PHP_INI_SYSTEM, OnUpdateString, domain_uri_key, zend_sg_monitor_globals, sg_monitor_globals)
 PHP_INI_END()
 /* }}} */
 
@@ -106,6 +110,7 @@ PHP_INI_END()
 static void php_sg_monitor_init_globals(zend_sg_monitor_globals *sg_monitor_globals)
 {
 	sg_monitor_globals->enable = 0;
+	sg_monitor_globals->failed = 0;
 }
 /* }}} */
 
@@ -273,22 +278,43 @@ static int uri_monitor_init()
  */
 static int uri_monitor_filter()
 {
+	zend_bool domonitor = 1;
+	//disable monitor
+	if (!SMG(enable)) {
+	    SMG(uri_need_monitor) = 0;
+	    return 0;
+	}
 	//SAPI filter, not http request disable monitor
-	if (!SG(request_info).request_method) {
-		SMG(enable) = 0;
-	} else {
+	if (SG(request_info).request_method) {
         //init domain uri
 	    zval* host = request_server_query("HTTP_HOST", sizeof("HTTP_HOST"));
 	    zval* uri = request_server_query("REQUEST_URI", sizeof("REQUEST_URI"));
-	    SMG(current_domain) = Z_STRVAL_P(host);
+		//trim query string ?a=x&b=y...
+        char * query_pos = strchr(Z_STRVAL_P(uri), '?');
 	    SMG(current_uri_str) = Z_STRVAL_P(uri);
+		if (query_pos) {
+            size_t uri_len = Z_STRLEN_P(uri) - P7_STR_LEN(query_pos);
+		    char * uri_without_query = (char *)emalloc(uri_len + 1);
+		    strncpy(uri_without_query, Z_STRVAL_P(uri), uri_len);
+		    uri_without_query[uri_len] = 0;
+	        SMG(current_uri_str) = uri_without_query;
+		}
+
+	    SMG(current_domain) = Z_STRVAL_P(host);
+	    //char *domain_uri = (char *)emalloc(P7_STR_LEN(SMG(current_domain)) + P7_STR_LEN(SMG(current_uri_str)) + 1);
 	    char *domain_uri = (char *)emalloc(P7_STR_LEN(SMG(current_domain)) + P7_STR_LEN(SMG(current_uri_str)) + 1);
 	    strcpy(domain_uri, SMG(current_domain));
 	    strcat(domain_uri, SMG(current_uri_str));
 	    SMG(current_domain_uri) = domain_uri;
+	
+		//filter domain
+	    if (strncasecmp(SMG(current_domain), SMG(domains), P7_STR_LEN(SMG(current_domain)))) {
+	        domonitor = 0;
+	    }
+	} else {
+		domonitor = 0;
 	}
-	//TODO filter domain
-	SMG(uri_need_monitor) = (1 && SMG(enable));
+	SMG(uri_need_monitor) = domonitor;
 	return SMG(uri_need_monitor);
 }
 /* }}} */
@@ -315,20 +341,23 @@ static int uri_send_stat()
 	//除以1000则进行毫秒计时，如果除以1000000则进行秒级别计时，如果除以1则进行微妙级别计时
 	SMG(sg_uri_stat).latency = 1000*(end_time.tv_sec - SMG(uri_start_time).tv_sec) + (end_time.tv_usec - SMG(uri_start_time).tv_usec)/1000; 
 	
-	//
-	
-	//if exit status != 0
+	//if failed 
 	if (EG(exit_status) == 0) {
 	    SMG(sg_uri_stat).failed_count = 0;
 	} else {
 	    SMG(sg_uri_stat).failed_count = 1;
 	}
 
+	//mem usage
+	pid_t pid = getpid();
+    SMG(sg_uri_stat).mem_rss = get_phy_mem(pid);
+    SMG(sg_uri_stat).mem_vsz = get_vsz_mem(pid);
 	/**
 	 * Get uri stat with key 
 	 * Key format: md5(domain_uri_timestamp)
 	 */
     gen_shm_uri_key(SMG(current_domain_uri), md5_key);
+	//PHPWRITE(SMG(current_domain_uri), P7_STR_LEN(SMG(current_domain_uri)));
     key.data = md5_key;
     key.length = P7_STR_LEN(key.data);
 
@@ -339,7 +368,7 @@ static int uri_send_stat()
 	
 	} else {
 		//accumulate uri stat
-	    deserialized = msgpack_unserialize_uri_stat(&shm_value);
+	    deserialized = msgpack_unserialize(&shm_value);
 		accumulate_uri(deserialized, &SMG(sg_uri_stat));
 	}
 
@@ -348,8 +377,8 @@ static int uri_send_stat()
     value = msgpack_serialize_uri_stat(&SMG(sg_uri_stat));
 	shm_result = shmcache_set(&SMG(monitor_context), &key, value.c, value.len, SHMCACHE_NEVER_EXPIRED);
 
-	//test unserialize
-
+	//save domain_uri 
+    
 	//TODO error log
 	if (shm_result != 0) {
 
@@ -372,8 +401,8 @@ static smart_str msgpack_serialize_uri_stat(uri_stat *stat)
 
     msgpack_pack_array(&pk, 6);
 	msgpack_pack_int(&pk, stat->cpu_load);
-	msgpack_pack_int(&pk, stat->mem_phys);
-	msgpack_pack_int(&pk, stat->mem_virt);
+	msgpack_pack_int(&pk, stat->mem_rss);
+	msgpack_pack_int(&pk, stat->mem_vsz);
 	msgpack_pack_int(&pk, stat->latency);
 	msgpack_pack_int(&pk, stat->uri_count);
 	msgpack_pack_int(&pk, stat->failed_count);
@@ -383,20 +412,20 @@ static smart_str msgpack_serialize_uri_stat(uri_stat *stat)
 }
 /* }}} */
 
-/** {{{ msgpack_unserialize_uri_stat
+/** {{{ msgpack_unserialize
  *
  */
-static msgpack_object msgpack_unserialize_uri_stat(struct shmcache_value_info *buf) 
+static msgpack_object msgpack_unserialize(struct shmcache_value_info *buf, int zone_size = 2048) 
 {
 	/* deserialize the buffer into msgpack_object instance. */
 	/* deserialized object is valid during the msgpack_zone instance alive. */
 	msgpack_zone mempool;
-    msgpack_zone_init(&mempool, 2048);
+    msgpack_zone_init(&mempool, zone_size);
 
 	msgpack_object deserialized;
 	msgpack_unpack(buf->data, buf->length, NULL, &mempool, &deserialized);
 
-	/* TODO DEBUG print the deserialized object. */
+	/* DEBUG print the deserialized object. */
 	//msgpack_object_print(stdout, deserialized);
 
 	msgpack_zone_destroy(&mempool);
@@ -419,9 +448,33 @@ static int msgpack_unserialize_func_stat()
 {}
 /* }}} */
 
+/** {{{ msgpack_serialize_uri_keys
+ *
+ */
+static smart_str msgpack_serialize_domain_uri(char *domain, char *uri)
+{
+    msgpack_sbuffer sbuf;
+	smart_str msgstr;
+    msgpack_sbuffer_init(&sbuf);
+
+	/* serialize values into the buffer using msgpack_sbuffer_write callback function. */
+	msgpack_packer pk;
+	msgpack_packer_init(&pk, &sbuf, msgpack_sbuffer_write);
+
+    msgpack_pack_array(&pk, 2);
+    msgpack_pack_str(&pk, P7_STR_LEN(domain));
+    msgpack_pack_str_body(&pk, P7_STR(domain), P7_STR_LEN(domain));
+    msgpack_pack_str(&pk, P7_STR_LEN(uri));
+    msgpack_pack_str_body(&pk, P7_STR(uri), P7_STR_LEN(uri));
+
+	smart_str_setl(&msgstr, sbuf.data, sbuf.size);
+	return msgstr;
+}   
+/* }}} */
+
 /** {{{ accumulate_uri
  * Accumulate uri stat
- * [cpu_load, mem_phys, mem_virt, latency, uri_count, failed_count]
+ * [cpu_load, mem_rss, mem_vsz, latency, uri_count, failed_count]
  */
 static int accumulate_uri(msgpack_object o, uri_stat *uri_stat_ptr) 
 {
@@ -441,12 +494,21 @@ static int accumulate_uri(msgpack_object o, uri_stat *uri_stat_ptr)
 			}
 		}
 		//max cpu occupy
-		if (uri_stat_ptr->cpu_load < stat[0]) {
-		    uri_stat_ptr->cpu_load = stat[0];
+		if (uri_stat_ptr->cpu_load < stat[URI_CPULOAD_POS]) {
+		    uri_stat_ptr->cpu_load = stat[URI_CPULOAD_POS];
 		}
-	    uri_stat_ptr->latency      += stat[3];
-	    uri_stat_ptr->uri_count    = stat[4] + 1;
-	    uri_stat_ptr->failed_count += stat[5];
+
+		//max rss/vsz
+		if (uri_stat_ptr->mem_rss < stat[URI_MEMRSS_POS]) {
+		    uri_stat_ptr->mem_rss = stat[URI_MEMRSS_POS];
+		}
+		if (uri_stat_ptr->mem_vsz < stat[URI_MEMVSZ_POS]) {
+		    uri_stat_ptr->mem_vsz = stat[URI_MEMVSZ_POS];
+		}
+
+	    uri_stat_ptr->latency      += stat[URI_LATENCY_POS];
+	    uri_stat_ptr->uri_count    = stat[URI_URICOUNT_POS] + 1;
+	    uri_stat_ptr->failed_count += stat[URI_FAILED_POS];
 	}
 }
 /* }}} */
@@ -488,7 +550,92 @@ static int gen_shm_uri_key(char *domain_uri_str, char *key)
 	//PHPWRITE(key, P7_STR_LEN(key));
 	return P7_STR_LEN(key);
 }
+/* }}} */
 
+/**
+ *
+ */
+static int add_domain_uri(char *domain, char* uri) 
+{
+	int shm_result;
+    struct shmcache_key_info key;
+    struct shmcache_value_info shm_value;
+	smart_str value;
+	char **domain_uri[2] = {domain, uri};
+
+	key.data = SMG(domain_uri_key);
+	key.length= P7_STR_LEN(SMG(domain_uri_key));
+    //get domain uri 
+	shm_result = shmcache_get(&SMG(monitor_context), &key, &shm_value);
+	
+	//pack value
+	if (shm_result) {
+	
+	} else {
+        value = msgpack_serialize_uri_stat(&SMG(sg_uri_stat));
+	}
+	shm_result = shmcache_set(&SMG(monitor_context), &key, value.c, value.len, SHMCACHE_NEVER_EXPIRED);
+	//search
+	//add new domain uri
+}
+/**/
+
+/** {{{ append_msgpack_domain_uri
+ * TODO
+ */
+static int append_msgpack_domain_uri(char **domain_uri, msgpack_object *o = NULL)
+{
+	//get records
+    if (MSGPACK_OBJECT_ARRAY == o.type && o.via.array.size != 0) {
+	    msgpack_object* p = o.via.array.ptr;
+		msgpack_object* const pend = o.via.array.ptr + o.via.array.size;
+
+	    int64_t stat[6];
+	    int i = 0;
+		for (; p < pend; ++p, ++i) {
+			if (MSGPACK_OBJECT_NEGATIVE_INTEGER == p->type) {
+				stat[i] = p->via.i64;
+			} else if (MSGPACK_OBJECT_POSITIVE_INTEGER == p->type) {
+				stat[i] = p->via.u64;
+			} else {
+                stat[i] = 0;
+			}
+		}
+		//max cpu occupy
+		if (uri_stat_ptr->cpu_load < stat[URI_CPULOAD_POS]) {
+		    uri_stat_ptr->cpu_load = stat[URI_CPULOAD_POS];
+		}
+
+		//max rss/vsz
+		if (uri_stat_ptr->mem_rss < stat[URI_MEMRSS_POS]) {
+		    uri_stat_ptr->mem_rss = stat[URI_MEMRSS_POS];
+		}
+		if (uri_stat_ptr->mem_vsz < stat[URI_MEMVSZ_POS]) {
+		    uri_stat_ptr->mem_vsz = stat[URI_MEMVSZ_POS];
+		}
+
+	    uri_stat_ptr->latency      += stat[URI_LATENCY_POS];
+	    uri_stat_ptr->uri_count    = stat[URI_URICOUNT_POS] + 1;
+	    uri_stat_ptr->failed_count += stat[URI_FAILED_POS];
+	}
+
+    msgpack_sbuffer sbuf;
+	smart_str msgstr;
+    msgpack_sbuffer_init(&sbuf);
+
+	/* serialize values into the buffer using msgpack_sbuffer_write callback function. */
+	msgpack_packer pk;
+	msgpack_packer_init(&pk, &sbuf, msgpack_sbuffer_write);
+
+    msgpack_pack_array(&pk, o.via.array.size + 1);
+    msgpack_pack_str(&pk, P7_STR_LEN(domain));
+    msgpack_pack_str_body(&pk, P7_STR(domain), P7_STR_LEN(domain));
+    msgpack_pack_str(&pk, P7_STR_LEN(uri));
+    msgpack_pack_str_body(&pk, P7_STR(uri), P7_STR_LEN(uri));
+
+	smart_str_setl(&msgstr, sbuf.data, sbuf.size);
+	return msgstr;
+}
 /* }}} */
 
 /** {{{
@@ -519,21 +666,6 @@ static zval * request_server_query(char * name, uint name_len TSRMLS_DC)
 	return *ret;
 }
 /* }}} */
-
-//unsigned int get_cpu_total_occupy()
-//{
-//    FILE *fd;         //定义文件指针fd
-//    char buff[1024] = {0};  //定义局部变量buff数组为char类型大小为1024
-//    total_cpu_occupy_t t;
-//    fd = fopen ("/proc/stat", "r"); //以R读的方式打开stat文件再赋给指针fd
-//    fgets (buff, sizeof(buff), fd); //从fd文件中读取长度为buff的字符串再存到起始地址为buff这个空间里
-//    /*下面是将buff的字符串根据参数format后转换为数据的结果存入相应的结构体参数 */
-//    char name[16];//暂时用来存放字符串
-//    sscanf (buff, "%s %u %u %u %u", name, &t.user, &t.nice,&t.system, &t.idle);
-//    
-//    fclose(fd);     //关闭文件fd
-//    return ((t.user + t.nice + t.system)*100)/(t.user + t.nice + t.system + t.idle);
-//}
 
 /* {{{ pm_execute_core
  * Trace Executor Replacement
@@ -601,13 +733,14 @@ ZEND_API void pm_execute_core(int internal, zend_execute_data *execute_data, zva
         }
 #endif
     } zend_catch {
-	    printf("\r\nzend catch\r\n");
+		dobailout = 1;
+		SMG(failed) = 1;
 	} zend_end_try();
 
+	//TODO save call monitor
 	if (domonitor) {
 	
 	}
-
 	if (dobailout) {
 	    zend_bailout();
 	}
